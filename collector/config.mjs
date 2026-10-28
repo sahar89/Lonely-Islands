@@ -2,17 +2,20 @@
 // Queries go to Bluesky's public search; the same terms filter the live
 // stream fallback. Edit freely: the collector reads this file on every run.
 
+// Languages the collector runs. The other term lists below stay ready for later.
+export const ACTIVE_LANGUAGES = ['en'];
+
 export const THEMES = {
   en: {
-    friendship:   ['friendship', 'my friends', 'best friend', 'old friend'],
-    loneliness:   ['lonely', 'loneliness', 'feel alone', 'feeling alone'],
-    belonging:    ['belonging', 'where i belong', 'feel at home', 'fit in'],
-    migration:    ['immigrant', 'moved abroad', 'emigrated', 'new country'],
+    friendship:   ['friendship', 'my friends', 'best friend', 'old friend', 'close friends'],
+    loneliness:   ['lonely', 'loneliness', 'feel alone', 'feeling alone', 'so alone'],
+    belonging:    ['belonging', 'where i belong', 'feel at home', 'feel like i belong'],
+    migration:    ['immigrant', 'moved abroad', 'emigrated', 'new country', 'left my country'],
     homesickness: ['homesick', 'homesickness', 'miss home', 'missing home'],
-    connection:   ['human connection', 'feel connected', 'meaningful connection'],
+    connection:   ['human connection', 'feel connected', 'meaningful connection', 'deep connection'],
     losingTouch:  ['lost touch', 'drifted apart', 'grew apart'],
-    reconnecting: ['reconnected', 'reconnect with', 'caught up with'],
-    community:    ['community', 'my neighbors', 'my people'],
+    reconnecting: ['reconnected', 'reconnect with', 'caught up with an old'],
+    community:    ['my community', 'sense of community', 'found community', 'find community'],
   },
   es: {
     friendship:   ['amistad', 'mis amigos', 'mejor amiga', 'mejor amigo'],
@@ -86,6 +89,14 @@ export const SENSITIVE = new Set([
   'suicidio', 'suicida', 'suicídio', 'selbstmord', 'suizid', '自殺', '死にたい',
 ]);
 
+// Everyday filler that carries no feeling on its own; never kept as a single word.
+export const GENERIC = new Set([
+  'posting', 'post', 'posts', 'posted', 'wanna', 'gonna', 'gotta', 'based', 'anti', 'lol', 'lmao', 'omg', 'yeah', 'yes',
+  'okay', 'thing', 'things', 'stuff', 'really', 'literally', 'actually', 'basically', 'today', 'tonight', 'week', 'year',
+  'years', 'time', 'times', 'day', 'days', 'level', 'read', 'reading', 'thread', 'link', 'video', 'watch', 'twitter',
+  'bluesky', 'bsky', 'skeet', 'follow', 'followers', 'account', 'news', 'article', 'via', 'rule', 'federal', 'policy',
+]);
+
 export const LIMITS = {
   searchPagesPerQuery: 3,      // 100 posts per page
   searchDelayMs: 1100,         // stay well under public rate limits
@@ -93,6 +104,8 @@ export const LIMITS = {
   jetstreamMinutes: 12,        // fallback listening window
   maxPostsPerAuthor: 2,        // per run; authors are never stored
   minDistinctAuthors: 2,       // a word must come from at least two people
+  minPhraseAuthors: 3,         // a phrase must come from at least three people
+  nearDuplicate: 0.4,          // share of a post's word sequences already seen that marks it as a copy
   maxEntries: 1500,            // vocabulary size cap
   forgetAfterDays: 45,         // collected words not seen for this long are removed
   decay: 0.85,                 // frequency carried over from previous runs

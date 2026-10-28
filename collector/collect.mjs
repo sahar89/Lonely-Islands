@@ -21,10 +21,10 @@ import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url);
 const naughty = require('naughty-words');
 const stopwordsIso = require('stopwords-iso');
-import { THEMES, SKIP_LABELS, SPAM_PATTERNS, SENSITIVE, LIMITS } from './config.mjs';
+import { THEMES, ACTIVE_LANGUAGES, GENERIC, SKIP_LABELS, SPAM_PATTERNS, SENSITIVE, LIMITS } from './config.mjs';
 
 const OUT = process.argv[2] || '../words.json';
-const LANGS = Object.keys(THEMES);
+const LANGS = ACTIVE_LANGUAGES.filter((l) => THEMES[l]);
 const PUBLIC_APPVIEW = 'https://public.api.bsky.app';
 const JETSTREAM = 'wss://jetstream2.us-east.bsky.network/subscribe?wantedCollections=app.bsky.feed.post';
 const UA = 'floating-islands-collector/1.0 (+art project; aggregated vocabulary only)';
@@ -32,7 +32,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const log = (...a) => console.log('[collect]', ...a);
 
 /* ------------------------------------------------------------------ lists */
-const STOP = Object.fromEntries(LANGS.map((l) => [l, new Set((stopwordsIso[l] || []).map((w) => w.toLocaleLowerCase(l)))]));
+const STOP = Object.fromEntries([...new Set([...LANGS, 'en'])].map((l) => [l, new Set((stopwordsIso[l] || []).map((w) => w.toLocaleLowerCase(l)))]));
 const BAD = new Set();
 const BAD_PHRASES = [];
 for (const [k, list] of Object.entries(naughty)) {
@@ -111,7 +111,7 @@ function extract(text, lang, nameParts) {
     if (valid && lang !== 'de' && lang !== 'ja' && !tk.start && /^\p{Lu}/u.test(raw) && raw !== raw.toUpperCase()) valid = false;
     const isStop = stop.has(lower) || STOP.en.has(lower);
     const form = lang === 'de' ? (raw === raw.toUpperCase() ? raw[0] + raw.slice(1).toLowerCase() : raw) : lower;
-    ok.push(valid ? { lower, form, content: !isStop && (lang === 'ja' || raw.length >= 3) } : { invalid: true });
+    ok.push(valid ? { lower, form, content: !isStop && !GENERIC.has(lower) && (lang === 'ja' || raw.length >= 3) } : { invalid: true });
   }
   const words = [], phrases = [];
   for (const o of ok) if (o && !o.invalid && o.content) words.push({ norm: o.lower, form: o.form });
@@ -131,6 +131,17 @@ function extract(text, lang, nameParts) {
 /* ------------------------------------------------------------- aggregation */
 const agg = new Map(); // key -> { lang, kind, forms: Map, themes: Map, authors: Set }
 const seenTexts = new Set();
+const seenShingles = new Set();
+// Copies of the same text posted by several accounts count as one post.
+function isNearDuplicate(text) {
+  const toks = text.toLowerCase().replace(URL_RE, ' ').replace(MENTION_RE, ' ').split(/[^\p{L}\p{N}']+/u).filter(Boolean);
+  if (toks.length < 6) return false;
+  const sh = [];
+  for (let i = 0; i + 4 <= toks.length; i++) sh.push(toks.slice(i, i + 4).join(' '));
+  const seen = sh.filter((x) => seenShingles.has(x)).length;
+  for (const x of sh) seenShingles.add(x);
+  return seen / sh.length >= LIMITS.nearDuplicate;
+}
 const authorPosts = new Map();
 const authorIds = new Map(); // in-memory only: did -> small integer
 let postsUsed = 0;
@@ -142,6 +153,7 @@ function addPost({ did, text, lang, theme, labels = [], nameParts = [] }) {
   const sig = text.toLowerCase().replace(/\s+/g, ' ').trim();
   if (seenTexts.has(sig)) return;
   seenTexts.add(sig);
+  if (isNearDuplicate(text)) return;
   const n = authorPosts.get(did) || 0;
   if (n >= LIMITS.maxPostsPerAuthor) return;
   authorPosts.set(did, n + 1);
@@ -276,7 +288,7 @@ async function main() {
   const now = new Date().toISOString(), nowMs = Date.now();
   const fresh = new Map();
   for (const [key, e] of agg) {
-    if (e.authors.size < LIMITS.minDistinctAuthors) continue;
+    if (e.authors.size < (e.kind === 'phrase' ? LIMITS.minPhraseAuthors : LIMITS.minDistinctAuthors)) continue;
     fresh.set(key, {
       text: top(e.forms), kind: e.kind, lang: e.lang, theme: top(e.themes),
       count: e.authors.size,
