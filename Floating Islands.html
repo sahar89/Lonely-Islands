@@ -1,0 +1,1826 @@
+<!doctype html><html><head><meta charset=utf8><meta name=viewport content="width=device-width,initial-scale=1,viewport-fit=cover"><style>:root{color-scheme:light;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}html{scroll-padding-top:env(safe-area-inset-top,0px)}body{margin:0;padding:0;font:14px -apple-system,BlinkMacSystemFont,sans-serif;background:#fff;color:#000}img{max-width:100%}[hidden]:not([hidden=until-found i]){display:none!important}</style></head><body>
+<title>Floating Islands</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400&display=swap">
+<style>
+  /* Single-world artwork: paper white + electric blue ink, no theme switching by design. */
+  :root { --paper: #FFFFFF; --ink: #2200FF; color-scheme: light; }
+  html, body { height: 100%; margin: 0; overflow: hidden; background: var(--paper); }
+  body { padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); padding-block: 0; }
+  canvas { position: fixed; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; background: var(--paper); cursor: default; image-rendering: pixelated; }
+  .hint { position: fixed; left: 0; right: 0; bottom: 0; padding: 0 max(16px, env(safe-area-inset-left, 0px)) calc(20px + env(safe-area-inset-bottom, 0px)) max(16px, env(safe-area-inset-right, 0px)); text-align: center; z-index: 2; pointer-events: none; user-select: none; font-family: 'IBM Plex Mono', ui-monospace, 'SFMono-Regular', Menlo, Consolas, monospace; font-size: 12px; letter-spacing: 0.04em; line-height: 1.5; color: var(--ink); }
+  .hint span { display: inline-block; padding: 4px 10px; background: var(--paper); }
+</style>
+<p class="hint"><span>Drag empty space to explore &middot; Drag an island to move it &middot; Scroll to zoom</span></p>
+<canvas id="world" aria-label="Floating islands: drag islands, drag empty space to pan, scroll to zoom"></canvas>
+<script>
+(() => {
+'use strict';
+
+/* =====================================================================
+   0. CONSTANTS, DETERMINISTIC RANDOMNESS, NOISE
+   ===================================================================== */
+const INK = '#2200FF', PAPER = '#FFFFFF';
+const WORLD_SEED = 1028;
+const REDUCED = matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+function hash3(x, y, z) {
+  let h = (Math.imul(x | 0, 0x27d4eb2d) ^ Math.imul(y | 0, 0x165667b1) ^ Math.imul(z | 0, 0x2c1b3c6d)) | 0;
+  h = Math.imul(h ^ (h >>> 15), 0x85ebca6b);
+  h = Math.imul(h ^ (h >>> 13), 0xc2b2ae35);
+  h ^= h >>> 16;
+  return (h >>> 0) / 4294967296;
+}
+function rng(seed) {
+  let a = seed >>> 0;
+  return () => {
+    a = (a + 0x6D2B79F5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+function vnoise(x, y, s) {
+  const xi = Math.floor(x), yi = Math.floor(y), xf = x - xi, yf = y - yi;
+  const u = xf * xf * (3 - 2 * xf), v = yf * yf * (3 - 2 * yf);
+  const a = hash3(xi, yi, s), b = hash3(xi + 1, yi, s), c = hash3(xi, yi + 1, s), d = hash3(xi + 1, yi + 1, s);
+  return a + (b - a) * u + (c - a) * v + (a - b - c + d) * u * v;
+}
+function fbm(x, y, s, oct = 4) {
+  let sum = 0, amp = 0.5, f = 1, n = 0;
+  for (let k = 0; k < oct; k++) { sum += amp * vnoise(x * f, y * f, s + k * 31); n += amp; amp *= 0.5; f *= 2.03; }
+  return sum / n;
+}
+const clamp = (v, a, b) => v < a ? a : v > b ? b : v;
+const smooth = (a, b, x) => { const t = clamp((x - a) / (b - a), 0, 1); return t * t * (3 - 2 * t); };
+
+/* =====================================================================
+   1. DITHER PATTERNS (ordered Bayer + material-specific thresholds)
+   ===================================================================== */
+const BAYER = (() => {
+  let m = [[0]];
+  for (let n = 1; n < 8; n *= 2) {
+    const r = [];
+    for (let y = 0; y < n * 2; y++) {
+      r[y] = [];
+      for (let x = 0; x < n * 2; x++) {
+        const v = m[y % n][x % n] * 4, q = y < n ? (x < n ? 0 : 2) : (x < n ? 3 : 1);
+        r[y][x] = v + q;
+      }
+    }
+    m = r;
+  }
+  const out = new Float32Array(64);
+  for (let y = 0; y < 8; y++) for (let x = 0; x < 8; x++) out[y * 8 + x] = (m[y][x] + 0.5) / 64;
+  return out;
+})();
+const bay = (x, y) => BAYER[((y & 7) << 3) | (x & 7)];
+
+// Light: from the front-left, elevated. In grid space (i,j) the horizontal
+// direction toward the light; +j faces (screen lower-left) are lit.
+const LI = -0.41, LJ = 0.91, LZ = 0.62, SUN_TAN = 0.8;
+
+/* =====================================================================
+   2. PROCEDURAL ISLAND GEOMETRY (footprint, terrain, underside)
+   ===================================================================== */
+const MAT = { GRASS: 1, ROCK: 2, SAND: 3, PATH: 4, WATER: 5, STONE: 6, DOME: 7, PAVE: 8, HEDGE: 9, SLIT: 10, FLOOR: 11 };
+const SIZE_R = { S: 26, M: 45, L: 70 };
+
+function terrace(e, step) { const q = e / step, f = q - Math.floor(q); return (Math.floor(q) + smooth(0.8, 1, f)) * step; }
+
+function* buildFootprint(spec, r) {
+  const arch = spec.arch;
+  let R = SIZE_R[spec.size] * (0.9 + r() * 0.24);
+  const lobes = [{ x: 0, y: 0, r: 1 }], bridges = [];
+  if (arch === 'fragment') {
+    R *= 0.78;
+    const n = 2 + (r() * 2 | 0);
+    let ang = r() * 6.283;
+    for (let k = 0; k < n; k++) {
+      ang += 1.4 + r() * 1.5;
+      const dist = 1.0 + r() * 0.5, lr = 0.3 + r() * 0.22;
+      const L = { x: Math.cos(ang) * dist, y: Math.sin(ang) * dist, r: lr };
+      lobes.push(L);
+      bridges.push({ ax: 0, ay: 0, bx: L.x, by: L.y, w: 0.09 + r() * 0.05 });
+    }
+  } else if (r() < 0.6) {
+    const ang = r() * 6.283, dist = 0.45 + r() * 0.35;
+    lobes.push({ x: Math.cos(ang) * dist, y: Math.sin(ang) * dist, r: 0.42 + r() * 0.26 });
+  }
+  const rot = r() * 6.283, an = 0.78 + r() * 0.44, cr = Math.cos(rot), sr = Math.sin(rot);
+  const harm = [];
+  for (let k = 2; k <= 7; k++) harm.push([k, (0.05 + r() * 0.1) / Math.pow(k - 1, 0.7), r() * 6.283]);
+  const ws = (spec.seed % 9973) + 17;
+  const ragged = (arch === 'rocky' || arch === 'desert' || arch === 'fragment') ? 0.17 : 0.11;
+  const N = Math.ceil(R * 4.6) + 10, C = N / 2;
+  const mask = new Uint8Array(N * N);
+  for (let j = 0; j < N; j++) { if ((j & 15) === 15) yield; for (let i = 0; i < N; i++) {
+    const x0 = (i - C) / R, y0 = (j - C) / R;
+    if (x0 * x0 + y0 * y0 > 4.6) continue;
+    const x = (x0 * cr - y0 * sr) * an, y = (x0 * sr + y0 * cr) / an;
+    const wx = x + 0.4 * (fbm(x * 1.3 + 11, y * 1.3, ws, 3) - 0.5);
+    const wy = y + 0.4 * (fbm(x * 1.3, y * 1.3 + 17, ws + 3, 3) - 0.5);
+    let v = -1;
+    for (const L of lobes) {
+      const dx = wx - L.x, dy = wy - L.y, th = Math.atan2(dy, dx);
+      let b = 1;
+      for (const [k, a, p] of harm) b += a * Math.cos(k * th + p);
+      v = Math.max(v, 1 - Math.hypot(dx, dy) / (L.r * b));
+    }
+    for (const q of bridges) {
+      const ex = q.bx - q.ax, ey = q.by - q.ay, t = clamp(((wx - q.ax) * ex + (wy - q.ay) * ey) / (ex * ex + ey * ey), 0, 1);
+      const d = Math.hypot(wx - q.ax - ex * t, wy - q.ay - ey * t);
+      v = Math.max(v, (q.w * (0.7 + 0.6 * vnoise(t * 6, 0, ws)) - d) * 1.2);
+    }
+    v += (fbm(wx * 6, wy * 6, ws + 9, 3) - 0.5) * ragged;
+    if (v > 0) mask[j * N + i] = 1;
+  } }
+  // Bites out of the coast and occasional through-holes.
+  const bites = r() < 0.65 ? 1 + (r() * 3 | 0) : 0;
+  for (let k = 0; k < bites; k++) {
+    const a = r() * 6.283, dd = (0.8 + r() * 0.25) * R, br = (0.12 + r() * 0.16) * R;
+    carve(mask, N, C + Math.cos(a) * dd, C + Math.sin(a) * dd, br, ws + k);
+  }
+  if (spec.size !== 'S' && arch !== 'fragment' && arch !== 'lake' && r() < 0.35) {
+    const a = r() * 6.283, dd = (0.35 + r() * 0.25) * R;
+    carve(mask, N, C + Math.cos(a) * dd, C + Math.sin(a) * dd, (0.06 + r() * 0.05) * R, ws + 50);
+  }
+  keepLargest(mask, N);
+  return { N, R, mask };
+}
+function carve(mask, N, cx, cy, rad, s) {
+  const r2 = Math.ceil(rad * 1.6);
+  for (let j = Math.max(0, cy - r2 | 0); j < Math.min(N, cy + r2 + 1); j++)
+    for (let i = Math.max(0, cx - r2 | 0); i < Math.min(N, cx + r2 + 1); i++) {
+      const d = Math.hypot(i - cx, j - cy) / rad;
+      if (d < 0.8 + 0.4 * vnoise(i * 0.25, j * 0.25, s)) mask[j * N + i] = 0;
+    }
+}
+function keepLargest(mask, N) {
+  const lab = new Int32Array(N * N), stack = new Int32Array(N * N);
+  let best = 0, bestSize = 0, id = 0;
+  for (let c = 0; c < N * N; c++) {
+    if (!mask[c] || lab[c]) continue;
+    id++; let sp = 0, size = 0; stack[sp++] = c; lab[c] = id;
+    while (sp) {
+      const q = stack[--sp]; size++;
+      const i = q % N, j = (q / N) | 0;
+      if (i > 0 && mask[q - 1] && !lab[q - 1]) { lab[q - 1] = id; stack[sp++] = q - 1; }
+      if (i < N - 1 && mask[q + 1] && !lab[q + 1]) { lab[q + 1] = id; stack[sp++] = q + 1; }
+      if (j > 0 && mask[q - N] && !lab[q - N]) { lab[q - N] = id; stack[sp++] = q - N; }
+      if (j < N - 1 && mask[q + N] && !lab[q + N]) { lab[q + N] = id; stack[sp++] = q + N; }
+    }
+    if (size > bestSize) { bestSize = size; best = id; }
+  }
+  for (let c = 0; c < N * N; c++) mask[c] = lab[c] === best ? 1 : 0;
+}
+function distField(mask, N) {
+  const D = new Float32Array(N * N), S2 = 1.414;
+  for (let c = 0; c < N * N; c++) D[c] = mask[c] ? 1e6 : 0;
+  const g = (i, j) => (i < 0 || j < 0 || i >= N || j >= N) ? 0 : D[j * N + i];
+  for (let j = 0; j < N; j++) for (let i = 0; i < N; i++) {
+    const c = j * N + i; if (!D[c]) continue;
+    D[c] = Math.min(D[c], g(i - 1, j) + 1, g(i, j - 1) + 1, g(i - 1, j - 1) + S2, g(i + 1, j - 1) + S2);
+  }
+  for (let j = N - 1; j >= 0; j--) for (let i = N - 1; i >= 0; i--) {
+    const c = j * N + i; if (!D[c]) continue;
+    D[c] = Math.min(D[c], g(i + 1, j) + 1, g(i, j + 1) + 1, g(i + 1, j + 1) + S2, g(i - 1, j + 1) + S2);
+  }
+  return D;
+}
+
+const ARCH = {
+  meadow:      { amp: 7,  step: 7,  top: MAT.GRASS },
+  forest:      { amp: 9,  step: 6,  top: MAT.FLOOR },
+  rocky:       { amp: 15, step: 4,  top: MAT.ROCK, ridged: true },
+  ruins:       { amp: 6,  step: 8,  top: MAT.GRASS },
+  garden:      { amp: 3,  step: 9,  top: MAT.GRASS },
+  lake:        { amp: 4,  step: 9,  top: MAT.GRASS },
+  desert:      { amp: 4,  step: 99, top: MAT.SAND },
+  observatory: { amp: 5,  step: 8,  top: MAT.GRASS },
+  plateau:     { amp: 5,  step: 7,  top: MAT.GRASS },
+  fragment:    { amp: 8,  step: 5,  top: MAT.GRASS },
+};
+
+function* buildTerrain(spec) {
+  const r = rng(spec.seed);
+  const { N, R, mask } = yield* buildFootprint(spec, r);
+  const D = distField(mask, N);
+  yield;
+  const s = (spec.seed % 7919) + 101;
+  const A = ARCH[spec.arch];
+  const H = new Float32Array(N * N), B = new Float32Array(N * N), M = new Uint8Array(N * N);
+  const SOL = new Uint8Array(N * N), NZ = new Float32Array(N * N), CRACK = new Uint8Array(N * N);
+  const hBase = { S: 5, M: 7, L: 9 }[spec.size];
+  let Dmax = 0;
+  for (let c = 0; c < N * N; c++) if (D[c] > Dmax) Dmax = D[c];
+  const f = 0.045 + r() * 0.02;
+  for (let j = 0; j < N; j++) for (let i = 0; i < N; i++) {
+    const c = j * N + i; if (!mask[c]) continue;
+    NZ[c] = fbm(i * 0.09, j * 0.09, s + 5, 3);
+    let n1 = fbm(i * f, j * f, s + 21, 4);
+    if (A.ridged) n1 = 1 - Math.abs(2 * n1 - 1);
+    const e = n1 * A.amp + Math.min(D[c], 14) * 0.22;
+    let h = hBase + terrace(e, A.step);
+    if (spec.arch === 'desert') h += Math.sin(i * 0.32 + j * 0.13 + NZ[c] * 5) * 0.7;
+    if (D[c] < 1.6) h -= (1.6 - D[c]) * 0.7;
+    H[c] = h; M[c] = A.top;
+  }
+  const T = { spec, r, s, N, R, mask, D, Dmax, H, B, M, SOL, NZ, CRACK, hBase, props: [], shadows: [] };
+  yield;
+  buildUnderside(T);
+  return T;
+}
+
+function buildUnderside(T) {
+  const { N, R, mask, D, Dmax, B, NZ, r, s, spec } = T;
+  const roll = r();
+  const style = spec.under || (spec.arch === 'plateau' ? (roll < 0.5 ? 'slab' : 'cone') : spec.size === 'S' ? (roll < 0.75 ? 'cone' : 'lobes') : (roll < 0.5 ? 'cone' : 'lobes'));
+  const depthRatio = ({ S: 1.7, M: 1.5, L: 1.55 })[spec.size] * (0.82 + r() * 0.4);
+  const kB = depthRatio * R / Math.pow(Math.max(Dmax, 2), 0.85);
+  const bumps = [], spikes = [];
+  const pick = (minD) => { for (let t = 0; t < 60; t++) { const c = (r() * N * N) | 0; if (mask[c] && D[c] >= minD) return c; } return -1; };
+  if (style === 'lobes') for (let k = 0; k < 2 + (r() * 3 | 0); k++) {
+    const c = pick(Dmax * 0.25); if (c < 0) continue;
+    bumps.push({ i: c % N, j: (c / N) | 0, rad: R * (0.22 + r() * 0.25), dep: R * (0.45 + r() * 0.6) });
+  }
+  for (let k = 0; k < 2 + (r() * 6 | 0); k++) {
+    const c = pick(3); if (c < 0) continue;
+    spikes.push({ i: c % N, j: (c / N) | 0, rad: 3.5 + r() * (R * 0.09 + 2), dep: (6 + r() * 16) * (R / 40) });
+  }
+  for (let j = 0; j < N; j++) for (let i = 0; i < N; i++) {
+    const c = j * N + i; if (!mask[c]) continue;
+    const dd = D[c], tb = 3 + NZ[c] * 3;
+    let b;
+    if (style === 'cone') b = tb + Math.pow(dd, 0.85) * kB * (0.72 + 0.55 * fbm(i * 0.05, j * 0.05, s + 33, 3));
+    else if (style === 'slab') b = tb + 5 + Math.min(dd, 9) * 1.1 + fbm(i * 0.07, j * 0.07, s + 34, 3) * 9;
+    else {
+      b = tb + Math.pow(dd, 0.7) * kB * 0.42;
+      for (const q of bumps) {
+        const d = Math.hypot(i - q.i, j - q.j) / q.rad;
+        if (d < 1) b = Math.max(b, tb + q.dep * Math.pow(1 - d, 1.3) * Math.min(1, dd / 4));
+      }
+    }
+    for (const q of spikes) {
+      const d = Math.hypot(i - q.i, j - q.j) / q.rad;
+      if (d < 1) b += q.dep * Math.pow(1 - d, 1.6);
+    }
+    b += (fbm(i * 0.16, j * 0.16, s + 77, 3) - 0.5) * 8 * Math.min(1, dd / 4);
+    B[c] = Math.max(2, b);
+  }
+  // soften single-cell anomalies while keeping the hanging silhouette
+  for (let pass = 0; pass < 2; pass++) {
+    const src = B.slice();
+    for (let j = 1; j < N - 1; j++) for (let i = 1; i < N - 1; i++) {
+      const c = j * N + i; if (!mask[c]) continue;
+      let sum = 0, n = 0;
+      for (let dj = -1; dj <= 1; dj++) for (let di = -1; di <= 1; di++) { const q = c + dj * N + di; if (mask[q]) { sum += src[q]; n++; } }
+      B[c] = Math.max(2, Math.min(src[c], sum / n + 3));
+    }
+  }
+}
+
+/* =====================================================================
+   3. ENVIRONMENTAL FEATURE GENERATION (archetypes, structures, props)
+   ===================================================================== */
+function idx(T, i, j) { return (i < 0 || j < 0 || i >= T.N || j >= T.N) ? -1 : j * T.N + i; }
+function randCell(T, pred, tries = 200) {
+  const { N, r } = T;
+  for (let t = 0; t < tries; t++) { const c = (r() * N * N) | 0; if (T.mask[c] && pred(c)) return c; }
+  return -1;
+}
+function farthestCell(T, jitter = 0.35) {
+  let best = -1, bv = -1;
+  for (let c = 0; c < T.N * T.N; c++) if (T.mask[c]) {
+    const v = T.D[c] * (1 - jitter + jitter * 2 * T.NZ[c]);
+    if (v > bv) { bv = v; best = c; }
+  }
+  return best;
+}
+const BLOCKERS = { tree: 2.2, conifer: 2, cypress: 1.6, bush: 1.8, dead: 1.6, cactus: 1.4, rock: 2, column: 0 };
+function freeOf(T, c, spacing) {
+  const i = c % T.N, j = (c / T.N) | 0;
+  for (const p of T.props) {
+    if (!(p.type in BLOCKERS)) continue;
+    if (Math.hypot(p.i - i, p.j - j) < spacing + (p.sz || 2) * 0.5) return false;
+  }
+  return true;
+}
+function groundOK(T, c, minD) {
+  if (!T.mask[c] || T.SOL[c] || T.M[c] === MAT.WATER || T.D[c] < minD) return false;
+  const N = T.N, h = T.H[c];
+  return Math.abs(T.H[c + 1] - h) < 1.6 && Math.abs(T.H[c - 1] - h) < 1.6 && Math.abs(T.H[c + N] - h) < 1.6 && Math.abs(T.H[c - N] - h) < 1.6;
+}
+function scatter(T, type, count, o = {}) {
+  const minD = o.minD ?? 3, spacing = o.spacing ?? 4;
+  for (let k = 0; k < count; k++) {
+    const c = randCell(T, (q) => groundOK(T, q, minD) && (!o.pred || o.pred(q)) && (!(type in BLOCKERS) || freeOf(T, q, spacing)), 120);
+    if (c < 0) continue;
+    const sz = typeof o.sz === 'function' ? o.sz() : (o.sz ?? 3);
+    T.props.push({ type, i: c % T.N, j: (c / T.N) | 0, sz, seed: (T.r() * 1e9) | 0 });
+  }
+}
+function flatten(T, ci, cj, rad, h) {
+  for (let j = Math.floor(cj - rad); j <= cj + rad; j++) for (let i = Math.floor(ci - rad); i <= ci + rad; i++) {
+    const c = idx(T, i, j); if (c < 0 || !T.mask[c]) continue;
+    const d = Math.hypot(i - ci, j - cj); if (d > rad) continue;
+    const w = smooth(rad, rad * 0.6, d);
+    T.H[c] = T.H[c] * (1 - w) + h * w;
+  }
+}
+function stampPath(T, pts, w, mat = MAT.PATH) {
+  for (let k = 0; k < pts.length - 1; k++) {
+    const [ai, aj] = pts[k], [bi, bj] = pts[k + 1];
+    const len = Math.hypot(bi - ai, bj - aj), steps = Math.ceil(len * 2);
+    for (let t = 0; t <= steps; t++) {
+      const pi = ai + (bi - ai) * t / steps, pj = aj + (bj - aj) * t / steps;
+      for (let dj = -w; dj <= w; dj++) for (let di = -w; di <= w; di++) {
+        if (di * di + dj * dj > w * w + 0.5) continue;
+        const c = idx(T, Math.round(pi + di), Math.round(pj + dj));
+        if (c < 0 || !T.mask[c] || T.SOL[c] || T.M[c] === MAT.WATER || T.D[c] < 1.5) continue;
+        T.M[c] = mat;
+      }
+    }
+  }
+}
+function wanderPath(T, c0, len, turn) {
+  const pts = []; let i = c0 % T.N, j = (c0 / T.N) | 0, a = T.r() * 6.283;
+  for (let k = 0; k < len; k++) {
+    pts.push([i, j]);
+    a += (T.r() - 0.5) * turn;
+    let ni = i + Math.cos(a) * 2, nj = j + Math.sin(a) * 2;
+    const c = idx(T, Math.round(ni), Math.round(nj));
+    if (c < 0 || T.D[c] < 3) { a += 2.2; continue; }
+    i = ni; j = nj;
+  }
+  return pts;
+}
+function addCracks(T, mats, n) {
+  for (let k = 0; k < n; k++) {
+    const c = randCell(T, (q) => mats.includes(T.M[q]) && T.D[q] > 2, 80); if (c < 0) continue;
+    let i = c % T.N, j = (c / T.N) | 0, a = T.r() * 6.283;
+    const len = 4 + T.r() * 14;
+    for (let t = 0; t < len; t++) {
+      const q = idx(T, Math.round(i), Math.round(j)); if (q < 0 || !T.mask[q]) break;
+      T.CRACK[q] = 1; a += (T.r() - 0.5) * 1.4; i += Math.cos(a); j += Math.sin(a);
+    }
+  }
+}
+function areaScale(T) { let n = 0; for (let c = 0; c < T.N * T.N; c++) n += T.mask[c]; return n; }
+
+function addWall(T, ci, cj, axis, len, hgt, thick = 2) {
+  const s = T.s, r = T.r;
+  for (let t = 0; t < len; t++) {
+    const prof = hgt * (0.35 + 0.65 * vnoise(t * 0.22, ci, s + 3)) * (vnoise(t * 0.35, cj, s + 4) < 0.22 ? 0.25 : 1);
+    for (let w = 0; w < thick; w++) {
+      const i = axis ? ci + t : ci + w, j = axis ? cj + w : cj + t;
+      const c = idx(T, i, j); if (c < 0 || !T.mask[c] || T.D[c] < 2) continue;
+      T.H[c] += Math.max(2, Math.round(prof + (r() < 0.2 ? -2 : 0)));
+      T.SOL[c] = 1; T.M[c] = MAT.STONE;
+    }
+  }
+}
+function addColumn(T, ci, cj, rad, hgt) {
+  for (let j = Math.floor(cj - rad - 1); j <= cj + rad + 1; j++) for (let i = Math.floor(ci - rad - 1); i <= ci + rad + 1; i++) {
+    const c = idx(T, i, j); if (c < 0 || !T.mask[c]) continue;
+    const d = Math.hypot(i - ci, j - cj); if (d > rad) continue;
+    T.H[c] += hgt + (d < rad * 0.5 ? 0.4 : 0); T.SOL[c] = 1; T.M[c] = MAT.STONE;
+  }
+}
+
+function decorate(T) {
+  const { r, spec } = T, arch = spec.arch, N = T.N;
+  const area = areaScale(T);
+  const per = (k) => Math.max(0, Math.round(area / k));
+  const treeSz = () => 4 + r() * (spec.size === 'L' ? 5.5 : spec.size === 'M' ? 4.5 : 3);
+  const notPath = (q) => T.M[q] !== MAT.PATH && T.M[q] !== MAT.PAVE;
+
+  if (arch === 'plateau') {
+    const s = T.s, mh = 14 + r() * 12, thr = 0.3 + r() * 0.12;
+    for (let c = 0; c < N * N; c++) if (T.mask[c]) {
+      const i = c % N, j = (c / N) | 0;
+      const m = T.D[c] / T.Dmax + (fbm(i * 0.05, j * 0.05, s + 61, 3) - 0.5) * 0.5;
+      if (m > thr) T.H[c] += mh + (m > thr + 0.25 ? 6 : 0);
+      else if (m > thr - 0.06) T.H[c] += 2;
+    }
+  }
+  if (arch === 'rocky') {
+    for (let c = 0; c < N * N; c++) if (T.mask[c] && (T.NZ[c] < 0.42 && T.D[c] > 3)) T.M[c] = MAT.GRASS;
+    const pins = 2 + (r() * 3 | 0);
+    for (let k = 0; k < pins; k++) {
+      const c = randCell(T, (q) => T.D[q] > 5); if (c < 0) continue;
+      const ci = c % N, cj = (c / N) | 0, rad = 3 + r() * (T.R * 0.12), ph = 12 + r() * 20;
+      for (let j = Math.floor(cj - rad); j <= cj + rad; j++) for (let i = Math.floor(ci - rad); i <= ci + rad; i++) {
+        const q = idx(T, i, j); if (q < 0 || !T.mask[q]) continue;
+        const d = Math.hypot(i - ci, j - cj) / (rad * (0.8 + 0.4 * vnoise(i * 0.4, j * 0.4, T.s + k)));
+        if (d < 1) { T.H[q] = Math.max(T.H[q], T.H[c] + Math.round(ph * Math.pow(1 - d, 0.9) / 3) * 3); T.M[q] = MAT.ROCK; T.SOL[q] = d < 0.85 ? 1 : 0; }
+      }
+    }
+    addCracks(T, [MAT.ROCK], per(60));
+    scatter(T, 'rock', per(140) + 2, { minD: 2, sz: () => 2 + r() * 3.5, spacing: 3 });
+    scatter(T, 'tuft', per(210), { minD: 2, pred: (q) => T.M[q] === MAT.GRASS });
+    if (r() < 0.6) scatter(T, r() < 0.5 ? 'conifer' : 'dead', 1, { minD: 4, sz: treeSz });
+  }
+  if (arch === 'desert') {
+    const mesas = 1 + (r() * 3 | 0);
+    for (let k = 0; k < mesas; k++) {
+      const c = randCell(T, (q) => T.D[q] > 4); if (c < 0) continue;
+      const ci = c % N, cj = (c / N) | 0, rad = 2.5 + r() * (T.R * 0.13), mh = Math.round(6 + r() * 12);
+      for (let j = Math.floor(cj - rad * 1.5); j <= cj + rad * 1.5; j++) for (let i = Math.floor(ci - rad * 1.5); i <= ci + rad * 1.5; i++) {
+        const q = idx(T, i, j); if (q < 0 || !T.mask[q]) continue;
+        const d = Math.hypot(i - ci, j - cj) / (rad * (0.75 + 0.5 * vnoise(i * 0.3, j * 0.3, T.s + 40 + k)));
+        if (d < 1) { T.H[q] = T.H[c] + mh - (d > 0.75 ? 3 : 0); T.M[q] = MAT.ROCK; T.SOL[q] = 1; }
+        else if (d < 1.35) T.M[q] = MAT.ROCK;
+      }
+    }
+    addCracks(T, [MAT.ROCK], 3);
+    scatter(T, 'cactus', 2 + (r() * 4 | 0), { minD: 3, sz: () => 4 + r() * 4, spacing: 5 });
+    if (r() < 0.7) scatter(T, 'dead', 1, { minD: 4, sz: treeSz });
+    scatter(T, 'rock', per(220) + 1, { minD: 2, sz: () => 1.5 + r() * 3, spacing: 3 });
+    scatter(T, 'pebble', per(75), { minD: 2 });
+  }
+  if (arch === 'lake') {
+    const c0 = farthestCell(T, 0.2), ci = c0 % N, cj = (c0 / N) | 0;
+    const Rb = clamp(T.D[c0] * 0.62, 3, 30), hW = T.hBase + 0.4;
+    for (let c = 0; c < N * N; c++) if (T.mask[c]) {
+      const i = c % N, j = (c / N) | 0;
+      const d = Math.hypot(i - ci, j - cj) / (Rb * (0.8 + 0.45 * fbm(i * 0.08, j * 0.08, T.s + 88, 3)));
+      if (d < 1 && T.D[c] > 3) { T.H[c] = hW; T.M[c] = MAT.WATER; }
+      else if (d < 1.5) T.H[c] = Math.min(T.H[c], hW + 1 + (d - 1) * 8);
+    }
+    for (let c = 0; c < N * N; c++) if (T.M[c] === MAT.WATER && T.r() < 0.08) {
+      const i = c % N, j = (c / N) | 0;
+      let shore = false;
+      for (const [a, b] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) { const q = idx(T, i + a * 2, j + b * 2); if (q >= 0 && T.M[q] !== MAT.WATER) shore = true; }
+      if (shore) T.props.push({ type: 'reed', i, j, sz: 2 + T.r() * 3, seed: (T.r() * 1e9) | 0 });
+    }
+    scatter(T, r() < 0.5 ? 'tree' : 'cypress', 2 + (r() * 3 | 0), { minD: 3, sz: treeSz, spacing: 6 });
+    scatter(T, 'bush', 1 + (r() * 3 | 0), { minD: 3, sz: () => 2 + r() * 2 });
+    scatter(T, 'rock', 2 + (r() * 3 | 0), { minD: 2, sz: () => 1.5 + r() * 2.5 });
+    scatter(T, 'tuft', per(210), { minD: 2 });
+    scatter(T, 'flower', per(225), { minD: 2 });
+  }
+  if (arch === 'ruins') {
+    const c0 = farthestCell(T, 0.2), ci = c0 % N, cj = (c0 / N) | 0;
+    const ext = clamp(T.D[c0] * 0.85, 6, 20), base = T.H[c0];
+    flatten(T, ci, cj, ext + 6, base);
+    const hw = Math.round(ext * 0.72), hd = Math.round(ext * 0.5);
+    const i0 = ci - hw, i1 = ci + hw, j0 = cj - hd, j1 = cj + hd;
+    // paved floor inside the enclosure, tiles missing toward the edges
+    for (let j = j0; j <= j1 + 3; j++) for (let i = i0; i <= i1; i++) {
+      const c = idx(T, i, j); if (c < 0 || !T.mask[c] || T.D[c] < 2.5) continue;
+      const edge = Math.max(Math.abs(i - ci) / hw, Math.abs(j - cj) / hd);
+      if (hash3(Math.floor((i + 100) / 4), Math.floor((j + 100) / 4), T.s) > 0.15 + 0.55 * edge) T.M[c] = MAT.PAVE;
+    }
+    addWall(T, i0, j0, 1, 2 * hw + 1, 13 + r() * 7, 3);       // back wall
+    addWall(T, i0, j0, 0, 2 * hd + 2, 9 + r() * 6, 3);        // left wall
+    addWall(T, i1 - 2, j0 + hd, 0, hd + 2, 6 + r() * 4, 3);   // right fragment
+    addWall(T, i0 + 3, j1 + 1, 1, Math.round(hw * 0.7), 3, 2); // low rubble line
+    // broken round tower on the back-right corner
+    const ti = i0 + 1, tj = j1 - 1, tr = 4.2 + r() * 1.4, th = 30 + r() * 12;
+    for (let j = Math.floor(tj - tr - 1); j <= tj + tr + 1; j++) for (let i = Math.floor(ti - tr - 1); i <= ti + tr + 1; i++) {
+      const q = idx(T, i, j); if (q < 0 || !T.mask[q] || T.D[q] < 1.5) continue;
+      const d = Math.hypot(i - ti, j - tj); if (d > tr) continue;
+      const a = Math.atan2(j - tj, i - ti), top = th * (0.6 + 0.4 * vnoise(a * 1.8 + 9, 0, T.s + 71));
+      T.H[q] = base + (d < tr - 1.7 ? top - 8 : top); T.SOL[q] = 1; T.M[q] = MAT.STONE;
+    }
+    // colonnade in front of the enclosure
+    const cjj = j1 + 6, nc = Math.max(3, Math.floor((2 * hw) / 6));
+    for (let k = 0; k <= nc; k++) {
+      const pi = Math.round(i0 + 1 + k * (2 * hw - 2) / nc), c = idx(T, pi, cjj);
+      if (c < 0 || !T.mask[c] || T.D[c] < 3.5) continue;
+      if (k === 2) continue; // gap where one fell
+      addColumn(T, pi, cjj, 1.9, hash3(k, 1, T.s) < 0.3 ? 4 + r() * 4 : 17 + r() * 10);
+    }
+    { // the fallen column lies across the grass
+      const fi = Math.round(i0 + 1 + 2 * (2 * hw - 2) / nc) - 1, fj = cjj + 2;
+      for (let t = 0; t < 11; t++) for (let w = -2; w <= 2; w++) {
+        const c = idx(T, fi + t, fj + w);
+        if (c < 0 || !T.mask[c] || T.D[c] < 2 || T.SOL[c]) continue;
+        T.H[c] = base + Math.sqrt(Math.max(0, 4.6 - w * w)) * 1.3; T.SOL[c] = 1; T.M[c] = MAT.STONE;
+      }
+    }
+    addCracks(T, [MAT.PAVE], 3);
+    scatter(T, 'tree', 1 + (r() * 2 | 0), { minD: 3, sz: treeSz, spacing: 6 });
+    scatter(T, 'cypress', 2, { minD: 3, sz: treeSz, spacing: 5 });
+    scatter(T, 'bush', 3 + (r() * 3 | 0), { minD: 2, sz: () => 1.8 + r() * 2 });
+    scatter(T, 'rock', 2, { minD: 2, sz: () => 1.5 + r() * 2 });
+    scatter(T, 'tuft', per(220), { minD: 2, pred: notPath });
+    scatter(T, 'pebble', per(300), { minD: 2, pred: (q) => T.M[q] === MAT.PAVE });
+    scatter(T, 'flower', per(300), { minD: 2, pred: notPath });
+  }
+  if (arch === 'observatory') {
+    const c0 = farthestCell(T, 0.15), ci = c0 % N, cj = (c0 / N) | 0;
+    const rd = clamp(T.D[c0] * 0.42, 4, 9), base = T.H[c0];
+    flatten(T, ci, cj, rd + 7, base);
+    for (let j = Math.floor(cj - rd - 4); j <= cj + rd + 4; j++) for (let i = Math.floor(ci - rd - 4); i <= ci + rd + 4; i++) {
+      const c = idx(T, i, j); if (c < 0 || !T.mask[c]) continue;
+      const d = Math.hypot(i - ci, j - cj);
+      if (d <= rd + 2.6) { T.H[c] = base + 4; T.M[c] = MAT.PAVE; T.SOL[c] = 0; }
+      if (d <= rd) {
+        T.H[c] = base + 4 + Math.sqrt(rd * rd - d * d) * 1.15 + 3; T.SOL[c] = 1; T.M[c] = MAT.DOME;
+        const a = Math.atan2(j - cj, i - ci), slit = Math.abs(((a - 1.9 + 9.42) % 6.283) - 3.14);
+        if (slit < 0.24 && d < rd - 0.6) T.M[c] = MAT.SLIT;
+      }
+    }
+    // stairs stepping down toward the viewer (+j), walkable
+    for (let k = 0; k < 6; k++) for (let w = -1; w <= 1; w++) {
+      const c = idx(T, ci + w, Math.round(cj + rd + 2.6 + k)); if (c < 0 || !T.mask[c]) continue;
+      T.H[c] = base + 4 - (k + 1) * 0.75; T.M[c] = MAT.STONE;
+    }
+    const pathEnd = randCell(T, (q) => T.D[q] > 3 && T.D[q] < 6);
+    if (pathEnd >= 0) stampPath(T, [[ci, cj + rd + 9], [(ci + pathEnd % N) / 2 + (r() - 0.5) * 6, (cj + rd + 9 + ((pathEnd / N) | 0)) / 2], [pathEnd % N, (pathEnd / N) | 0]], 1);
+    scatter(T, 'cypress', 1 + (r() * 3 | 0), { minD: 3, sz: treeSz, spacing: 5 });
+    scatter(T, 'rock', 2 + (r() * 3 | 0), { minD: 2, sz: () => 1.5 + r() * 3 });
+    scatter(T, 'tuft', per(210), { minD: 2, pred: notPath });
+    scatter(T, 'flower', per(400), { minD: 2, pred: notPath });
+  }
+  if (arch === 'garden') {
+    const c0 = farthestCell(T, 0.2), ci = c0 % N, cj = (c0 / N) | 0, Rr = Math.max(4, T.D[c0] * 0.65);
+    const loop = [];
+    for (let k = 0; k <= 24; k++) {
+      const a = k / 24 * 6.283, rr = Rr * (0.85 + 0.3 * vnoise(k * 0.5, 0, T.s + 2));
+      loop.push([ci + Math.cos(a) * rr, cj + Math.sin(a) * rr * 0.9]);
+    }
+    stampPath(T, loop, 1);
+    stampPath(T, [[ci, cj], [ci + Rr, cj + (r() - 0.5) * Rr]], 1);
+    if (r() < 0.6 && spec.size !== 'S') { // pond
+      const pr = 2.5 + r() * 2.5;
+      for (let j = Math.floor(cj - pr - 1); j <= cj + pr + 1; j++) for (let i = Math.floor(ci - pr - 1); i <= ci + pr + 1; i++) {
+        const c = idx(T, i, j); if (c < 0 || !T.mask[c]) continue;
+        const d = Math.hypot(i - ci, j - cj); if (d < pr) { T.H[c] = T.H[c0] - 1; T.M[c] = MAT.WATER; }
+      }
+    }
+    // hedges: low leafy walls along short segments
+    for (let k = 0; k < 2 + (r() * 3 | 0); k++) {
+      const c = randCell(T, (q) => T.D[q] > 4 && T.M[q] === MAT.GRASS); if (c < 0) continue;
+      const ax = r() < 0.5, len = 5 + (r() * 9 | 0);
+      for (let t = 0; t < len; t++) for (let w = 0; w < 2; w++) {
+        const q = ax ? idx(T, c % N + t, ((c / N) | 0) + w) : idx(T, c % N + w, ((c / N) | 0) + t);
+        if (q < 0 || !T.mask[q] || T.D[q] < 2 || T.M[q] === MAT.PATH || T.M[q] === MAT.WATER) continue;
+        T.H[q] += 3 + (vnoise(t * 0.5, w, T.s) > 0.6 ? 1 : 0); T.M[q] = MAT.HEDGE; T.SOL[q] = 1;
+      }
+    }
+    scatter(T, 'bush', per(160) + 2, { minD: 2, sz: () => 1.6 + r() * 2.2, spacing: 3, pred: notPath });
+    scatter(T, 'tree', 1, { minD: 4, sz: treeSz });
+    scatter(T, 'cypress', r() < 0.5 ? 2 : 0, { minD: 3, sz: treeSz });
+    scatter(T, 'flower', per(70), { minD: 2, pred: notPath });
+    scatter(T, 'tuft', per(490), { minD: 2, pred: notPath });
+  }
+  if (arch === 'meadow') {
+    scatter(T, r() < 0.7 ? 'tree' : 'cypress', 1 + (r() * 2 | 0), { minD: 4, sz: treeSz, spacing: 8 });
+    scatter(T, 'bush', r() * 3 | 0, { minD: 3, sz: () => 2 + r() * 2 });
+    scatter(T, 'rock', 1 + (r() * 3 | 0), { minD: 2, sz: () => 1.5 + r() * 2.5 });
+    scatter(T, 'flower', per(75), { minD: 2 });
+    scatter(T, 'tuft', per(154), { minD: 2 });
+    if (spec.size !== 'S' && r() < 0.6) { const c = randCell(T, (q) => T.D[q] > 4); if (c >= 0) stampPath(T, wanderPath(T, c, 14, 1.0), 0); }
+  }
+  if (arch === 'forest') {
+    const n = per(spec.size === 'S' ? 80 : 120) + 3;
+    for (let k = 0; k < n; k++) {
+      const roll = r(), t = roll < 0.5 ? 'tree' : roll < 0.85 ? 'conifer' : 'cypress';
+      scatter(T, t, 1, { minD: 3, sz: treeSz, spacing: 3.2 });
+    }
+    scatter(T, 'bush', per(200) + 2, { minD: 2, sz: () => 1.6 + r() * 2 });
+    scatter(T, 'tuft', per(280), { minD: 2 });
+    scatter(T, 'rock', 1 + (r() * 2 | 0), { minD: 2, sz: () => 1.5 + r() * 2 });
+    if (spec.size !== 'S') { const c = randCell(T, (q) => T.D[q] > 4); if (c >= 0) stampPath(T, wanderPath(T, c, 16, 1.2), 0); }
+  }
+  if (arch === 'plateau') {
+    scatter(T, 'tree', 1 + (r() * 2 | 0), { minD: 4, sz: treeSz, spacing: 6 });
+    scatter(T, 'conifer', 1 + (r() * 3 | 0), { minD: 3, sz: treeSz, spacing: 5 });
+    scatter(T, 'rock', 2 + (r() * 3 | 0), { minD: 2, sz: () => 1.5 + r() * 3 });
+    scatter(T, 'tuft', per(196), { minD: 2 });
+    scatter(T, 'flower', per(300), { minD: 2 });
+  }
+  if (arch === 'fragment') {
+    scatter(T, r() < 0.5 ? 'tree' : 'cypress', 1, { minD: 3, sz: treeSz });
+    scatter(T, 'rock', 2 + (r() * 3 | 0), { minD: 1.5, sz: () => 1.5 + r() * 2.5, spacing: 3 });
+    scatter(T, 'tuft', per(175), { minD: 1.5 });
+    scatter(T, 'flower', per(275), { minD: 2 });
+    addCracks(T, [MAT.GRASS], 2);
+  }
+  // Steep natural slopes read as exposed rock.
+  for (let c = N + 1; c < N * N - N - 1; c++) if (T.mask[c] && !T.SOL[c] && T.M[c] === MAT.GRASS) {
+    const g = Math.abs(T.H[c + 1] - T.H[c - 1]) + Math.abs(T.H[c + N] - T.H[c - N]);
+    if (g > 5 && T.mask[c + 1] && T.mask[c - 1] && T.mask[c + N] && T.mask[c - N]) T.M[c] = MAT.ROCK;
+  }
+}
+
+/* =====================================================================
+   4. ISOMETRIC PROJECTION + 5. DITHERING / PIXEL RENDERING
+   Grid cell (i,j) at height h projects to sprite pixel
+   x = i - j + ox,  y = floor((i + j) / 2 - h) + oy   (2:1 iso, ~30° view)
+   ===================================================================== */
+const PAD_T = 50, PAD_S = 12, PAD_B = 28;
+
+function rasterize(T) {
+  const { N, mask, H, B } = T;
+  let minX = 1e9, maxX = -1e9, minY = 1e9, maxY = -1e9;
+  for (let j = 0; j < N; j++) for (let i = 0; i < N; i++) {
+    const c = j * N + i; if (!mask[c]) continue;
+    const x = i - j, s = (i + j) * 0.5;
+    if (x < minX) minX = x; if (x > maxX) maxX = x;
+    const yt = Math.floor(s - H[c]), yb = Math.floor(s + B[c]);
+    if (yt < minY) minY = yt; if (yb > maxY) maxY = yb;
+  }
+  const W = maxX - minX + 1 + PAD_S * 2, Hh = maxY - minY + 1 + PAD_T + PAD_B;
+  const ox = -minX + PAD_S, oy = -minY + PAD_T;
+  const cell = new Int32Array(W * Hh).fill(-1), dep = new Int16Array(W * Hh);
+  for (let s = 0; s <= 2 * N - 2; s++) {
+    for (let i = Math.max(0, s - N + 1); i <= Math.min(N - 1, s); i++) {
+      const j = s - i, c = j * N + i; if (!mask[c]) continue;
+      const x = i - j + ox, yt = Math.floor(s * 0.5 - H[c]) + oy, yb = Math.floor(s * 0.5 + B[c]) + oy;
+      for (let y = yt; y <= yb; y++) { const p = y * W + x; cell[p] = c; dep[p] = y - yt; }
+    }
+  }
+  return { W, Hh, ox, oy, cell, dep };
+}
+
+function smoothNormals(T, F, outside) {
+  const { N, mask } = T, ni = new Float32Array(N * N), nj = new Float32Array(N * N);
+  const g = (i, j) => { const c = idx(T, i, j); return c >= 0 && mask[c] ? F[c] : outside(i, j); };
+  for (let j = 0; j < N; j++) for (let i = 0; i < N; i++) {
+    const c = j * N + i; if (!mask[c]) continue;
+    let gi = 0, gj = 0;
+    for (let dj = -1; dj <= 1; dj++) for (let di = -1; di <= 1; di++) {
+      gi += g(i + di + 1, j + dj) - g(i + di - 1, j + dj);
+      gj += g(i + di, j + dj + 1) - g(i + di, j + dj - 1);
+    }
+    const l = Math.hypot(gi, gj) || 1;
+    ni[c] = -gi / l; nj[c] = -gj / l;
+  }
+  return { ni, nj };
+}
+
+function castShadows(T) {
+  const { N, mask, H } = T, sh = new Uint8Array(N * N);
+  for (let j = 0; j < N; j++) for (let i = 0; i < N; i++) {
+    const c = j * N + i; if (!mask[c]) continue;
+    const h0 = H[c];
+    for (let k = 1.5; k < 22; k += 1) {
+      const q = idx(T, Math.round(i + LI * k), Math.round(j + LJ * k));
+      if (q < 0) break;
+      if (mask[q] && H[q] > h0 + k * SUN_TAN + 0.8) { sh[c] = 1; break; }
+    }
+  }
+  // soft prop shadows (trees, bushes, rocks) stamped toward the far side
+  for (const p of T.props) {
+    const ext = { tree: 1.5, conifer: 1.1, cypress: 0.7, bush: 0.9, rock: 0.8, dead: 0.4, cactus: 0.35 }[p.type];
+    if (!ext) continue;
+    const len = p.sz * (p.type === 'bush' || p.type === 'rock' ? 0.5 : 1.3);
+    const ci = p.i - LI * len, cj = p.j - LJ * len, rr = p.sz * ext + 0.5;
+    for (let j = Math.floor(cj - rr - 1); j <= cj + rr + 1; j++) for (let i = Math.floor(ci - rr - 1); i <= ci + rr + 1; i++) {
+      const q = idx(T, i, j); if (q < 0 || !mask[q]) continue;
+      const d = Math.hypot((i - ci) / 1.25, (j - cj) * 0.9) / rr;
+      if (d < 1 + (hash3(i, j, 9) - 0.5) * 0.25) sh[q] = Math.max(sh[q], 2);
+    }
+  }
+  return sh;
+}
+
+// Material-aware thresholds. Each returns true for an ink pixel.
+function inkTop(T, c, i, j, x, y, shadow, lit, ao) {
+  const s = T.s, m = T.M[c], nz = T.NZ[c];
+  const shd = shadow ? (shadow === 2 ? 0.4 : 0.5) : 0;
+  if (T.CRACK[c] && m !== MAT.WATER) return true;
+  switch (m) {
+    case MAT.GRASS: case MAT.FLOOR: {
+      // grass blades: one candidate per jittered 3x3 block, 2px tall strokes
+      const blade = (ii, jj) => {
+        const bi = Math.floor(ii / 3), bj = Math.floor(jj / 3);
+        const oi = (hash3(bi, bj, s) * 3) | 0, oj = (hash3(bi, bj, s + 1) * 3) | 0;
+        return ii - bi * 3 === oi && jj - bj * 3 === oj && hash3(bi, bj, s + 2) < (m === MAT.FLOOR ? 0.55 : 0.3) + (nz - 0.5) * 0.6;
+      };
+      if (blade(i, j) || blade(i + 1, j + 1)) return true;
+      const tone = (m === MAT.FLOOR ? 0.1 : 0) + shd + ao + Math.max(0, -lit) * 0.4;
+      return tone > bay(x, y);
+    }
+    case MAT.ROCK: {
+      const t = 0.2 - lit * 0.55 + (nz - 0.5) * 0.25 + shd + ao;
+      const wob = vnoise(i * 0.2, j * 0.2, s) * 3 | 0;
+      const a = ((i + wob) & 3) === 0, b = ((j + wob) & 3) === 0;
+      const thr = a && b ? 0.05 : a ? 0.22 : b ? 0.42 : 0.66 + 0.34 * bay(x, y);
+      return t > thr;
+    }
+    case MAT.SAND: {
+      const t = 0.1 - lit * 0.5 + shd + ao * 0.8;
+      const q = (i * 0.55 + j * 0.22 + nz * 7) / 3.2, line = (q - Math.floor(q)) < 0.3;
+      const thr = line ? 0.08 + 0.18 * hash3(x >> 1, y, s) : 0.62 + 0.38 * bay(x, y);
+      return t > thr;
+    }
+    case MAT.PATH: {
+      const t = 0.05 + shd * 0.9 + ao;
+      return hash3(i, j, s + 3) > 0.94 || t > 0.5 + 0.5 * bay(x, y);
+    }
+    case MAT.PAVE: {
+      const u = i + 100, v = j + 100;
+      const line = (u % 6 === 0) || (v % 6 === 0);
+      if (line && hash3(Math.floor(u / 6) * 3 + (u % 6 === 0), Math.floor(v / 6), s + 8) > 0.35) return true;
+      return shd * 0.95 + ao > bay(x, y);
+    }
+    case MAT.WATER: {
+      const row = ((y % 3) + 3) % 3, t = 0.4 + ao * 1.5 + (shadow ? 0.2 : 0);
+      const thr = row === 0 ? 0.12 + 0.5 * hash3(x >> 2, y, s + 6) : row === 1 ? 0.72 + 0.28 * bay(x, y) : 0.86 + 0.14 * bay(x, y);
+      return t > thr;
+    }
+    case MAT.STONE: {
+      return shd * 0.9 + ao + Math.max(0, -lit) * 0.3 > bay(x, y) || hash3(i, j, s + 4) < 0.05;
+    }
+    case MAT.HEDGE: {
+      const t = 0.42 - lit * 0.4 + shd * 0.6;
+      return t > 0.5 * hash3(x >> 1, y >> 1, s + 5) + 0.5 * bay(x, y);
+    }
+    default: return false;
+  }
+}
+function inkDome(T, c, x, y, i, j) {
+  if (T.M[c] === MAT.SLIT) return true;
+  const N = T.N, H = T.H;
+  const gi = (H[c + 1] - H[c - 1]) * 0.5, gj = (H[c + N] - H[c - N]) * 0.5;
+  const l = Math.hypot(gi, gj, 1), d = (-gi * LI - gj * LJ + LZ * 1.4) / (l * 1.6);
+  const t = 0.92 - 0.95 * clamp(d, 0, 1);
+  return t > bay(x, y);
+}
+function inkSide(T, c, x, y, d, NG, NB) {
+  const s = T.s, m = T.M[c], z = T.H[c] - d;
+  if (m === MAT.DOME || m === MAT.SLIT) return inkDome(T, c, x, y);
+  if (T.SOL[c] && m === MAT.STONE) {
+    const lit = NG.ni[c] * LI + NG.nj[c] * LJ;
+    const zz = Math.floor(z), row = Math.floor(zz / 3);
+    const mortar = ((zz % 3) + 3) % 3 === 0 || ((x + (row & 1) * 3) % 6 === 0);
+    const row4 = Math.floor(zz / 4), mortar4 = ((zz % 4) + 4) % 4 === 0 || ((x + (row4 & 1) * 4) % 8 === 0);
+    if (lit > 0.1) return mortar4 && hash3(x, row, s) > 0.25;
+    return (mortar && hash3(x, row, s) > 0.1) || bay(x, y) < 0.26 + (hash3(x >> 2, row, s + 1) - 0.5) * 0.2;
+  }
+  if (m === MAT.HEDGE && d < 6) {
+    const lit = NG.ni[c] * LI + NG.nj[c] * LJ;
+    return 0.6 - lit * 0.3 > 0.5 * hash3(x >> 1, y >> 1, s + 5) + 0.5 * bay(x, y);
+  }
+  const datum = T.SOL[c] ? -1 : 0;
+  const wob = (T.NZ[c] - 0.5) * 3 + vnoise(x * 0.18, 0, s + 12) * 1.2;
+  const row = Math.floor(z + wob), even = (row & 1) === 0;
+  const brk = hash3(x >> 2, row, s + 2);
+  if (z >= datum) { // exposed cliff band: hatching along true height lines
+    const lit = NG.ni[c] * LI + NG.nj[c] * LJ;
+    const grassTop = m === MAT.GRASS || m === MAT.FLOOR || m === MAT.HEDGE;
+    if (grassTop && d >= 1) { // hanging roots and grass drips under the rim
+      const hx = hash3(x, 5, s), len = hx < 0.28 ? 2 + hash3(x, 6, s) * 9 : 1;
+      if (d <= len && (d <= 1 || (x & 1) === 0)) return true;
+    } else if (d === 1) return true;
+    if (lit > 0.2) return (((row % 3) + 3) % 3 === 0 && brk > 0.18) || bay(x, y) < 0.06;
+    if (lit > -0.25) return (even && brk > 0.1) || bay(x, y) < 0.14;
+    return even || bay(x, y) < 0.42;
+  }
+  // underside: hatching thickens into dense vertical erosion streaks toward the tips
+  const f = clamp(-z / Math.max(3, T.B[c]), 0, 1);
+  const litb = NB.ni[c] * LI + NB.nj[c] * LJ;
+  const col = hash3(x, 9, s), dark = col < 0.22, light = col > 0.92 && f < 0.8;
+  const t = 0.3 + 0.6 * f - litb * 0.32 + (dark ? 0.22 : 0) - (light ? 0.35 : 0);
+  const rm = litb > 0.3 && f < 0.45 ? 4 : litb > -0.15 && f < 0.6 ? 3 : 2;
+  if (((row % rm) + rm) % rm === 0 && !light) return true;
+  return t > 0.35 + 0.65 * bay(x, y);
+}
+
+function makeSurface(W, Hh) {
+  return { W, Hh, cov: new Uint8Array(W * Hh), ink: new Uint8Array(W * Hh), key: new Int16Array(W * Hh), kind: new Uint8Array(W * Hh) };
+}
+function put(S, x, y, ink, key) {
+  x |= 0; y |= 0;
+  if (x < 0 || y < 0 || x >= S.W || y >= S.Hh) return;
+  const p = y * S.W + x;
+  if (S.cov[p] && S.key[p] > key) return;
+  S.cov[p] = 1; S.ink[p] = ink ? 1 : 0; S.key[p] = key; S.kind[p] = 4;
+}
+
+function* shadeIsland(T, G) {
+  const { N, mask, H, B, M } = T, { W, Hh, cell, dep } = G;
+  const S = makeSurface(W, Hh);
+  const NG = smoothNormals(T, H, () => -40), NB = smoothNormals(T, B, () => 0);
+  yield;
+  const SH = castShadows(T);
+  yield;
+  const drop = new Float32Array(N * N);
+  for (let j = 0; j < N; j++) for (let i = 0; i < N; i++) {
+    const c = j * N + i; if (!mask[c]) continue;
+    const a = idx(T, i + 1, j), b = idx(T, i, j + 1), e = idx(T, i + 1, j + 1);
+    const ha = a >= 0 && mask[a] ? H[a] : -99, hb = b >= 0 && mask[b] ? H[b] : -99, he = e >= 0 && mask[e] ? H[e] : -99;
+    drop[c] = H[c] - Math.min(ha, hb, he);
+  }
+  const water = [];
+  for (let p = 0; p < W * Hh; p++) {
+    if ((p & 8191) === 8191) yield;
+    const c = cell[p]; if (c < 0) continue;
+    const x = p % W, y = (p / W) | 0, d = dep[p], i = c % N, j = (c / N) | 0;
+    S.cov[p] = 1; S.key[p] = i + j;
+    const top = d === 0 || (d === 1 && drop[c] < 2);
+    S.kind[p] = top ? 1 : 2;
+    if (M[c] === MAT.DOME || M[c] === MAT.SLIT) { S.ink[p] = inkDome(T, c, x, y) ? 1 : 0; S.kind[p] = 3; continue; }
+    if (top) {
+      const gi = (H[idx(T, i + 1, j)] ?? H[c]) - (H[idx(T, i - 1, j)] ?? H[c]);
+      const gj = (H[idx(T, i, j + 1)] ?? H[c]) - (H[idx(T, i, j - 1)] ?? H[c]);
+      const lit = clamp((-gi * LI - gj * LJ) * 0.25, -0.4, 0.4);
+      // ambient occlusion at cliff bases
+      let ao = 0;
+      for (const [a, b] of [[-1, 0], [0, -1], [-2, 0], [0, -2], [-1, -1]]) { const q = idx(T, i + a, j + b); if (q >= 0 && mask[q] && H[q] > H[c] + 2.5) ao += 0.07; }
+      if (M[c] === MAT.WATER) {
+        ao = 0;
+        for (const [a, b] of [[1, 0], [-1, 0], [0, 1], [0, -1], [2, 0], [0, 2]]) { const q = idx(T, i + a, j + b); if (q >= 0 && M[q] !== MAT.WATER) ao += 0.06; }
+        water.push(x, y);
+      }
+      S.ink[p] = inkTop(T, c, i, j, x, y, SH[c], lit, ao) ? 1 : 0;
+    } else {
+      S.ink[p] = inkSide(T, c, x, y, d, NG, NB) ? 1 : 0;
+    }
+  }
+  // Outline pass: silhouette, rims, creases and depth discontinuities.
+  const out = S.ink.slice();
+  for (let y = 1; y < Hh - 1; y++) for (let x = 1; x < W - 1; x++) {
+    const p = y * W + x; if (!S.cov[p]) continue;
+    const dn = p + W, up = p - W, lf = p - 1, rt = p + 1;
+    if (!S.cov[lf] || !S.cov[rt] || !S.cov[up] || !S.cov[dn]) { out[p] = 1; continue; }
+    const k = S.key[p], tp = S.kind[p] === 1;
+    if (tp && S.kind[dn] !== 1 && S.kind[dn] !== 3) { out[p] = 1; continue; }
+    if (!tp && S.kind[dn] === 1 && S.key[dn] > k + 1) { out[p] = 1; continue; }
+    if (k - S.key[lf] > 6 || k - S.key[rt] > 6 || k - S.key[up] > 6) { out[p] = 1; continue; }
+    if (tp && S.kind[up] === 1) { // water / structure edges on tops
+      const c = cell[p], q = cell[up];
+      if ((M[c] === MAT.WATER) !== (M[q] === MAT.WATER)) { out[p] = 1; continue; }
+    }
+  }
+  S.ink = out;
+  return { S, water };
+}
+
+/* ---- Props: trees, rocks, plants (pixel-drawn with depth keys) ---- */
+function canopy(S, blobs, key, rr, s, dense) {
+  let x0 = 1e9, x1 = -1e9, y0 = 1e9, y1 = -1e9;
+  for (const b of blobs) { x0 = Math.min(x0, b.x - b.r); x1 = Math.max(x1, b.x + b.r); y0 = Math.min(y0, b.y - b.r); y1 = Math.max(y1, b.y + b.r); }
+  x0 = Math.floor(x0) - 1; y0 = Math.floor(y0) - 1; x1 = Math.ceil(x1) + 1; y1 = Math.ceil(y1) + 1;
+  const w = x1 - x0 + 1, h = y1 - y0 + 1, inside = new Uint8Array(w * h), ink = new Uint8Array(w * h);
+  for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) {
+    let best = null, bv = -1;
+    for (const b of blobs) { const dx = x + 0.5 - b.x, dy = y + 0.5 - b.y, v = 1 - (dx * dx + dy * dy) / (b.r * b.r); if (v > 0 && (b.y + b.r * 0.2 > (best ? best.y + best.r * 0.2 : -1e9) || v > bv) && v > 0) { if (!best || b.y + b.r > best.y + best.r - 1.2 || v > bv) { best = b; bv = v; } } }
+    if (!best) continue;
+    const q = (y - y0) * w + (x - x0); inside[q] = 1;
+    const nx = (x + 0.5 - best.x) / best.r, ny = (y + 0.5 - best.y) / best.r, nz = Math.sqrt(Math.max(0, 1 - nx * nx - ny * ny));
+    // leaf clumps: jittered 3px cells add bumpy local normals
+    const gx = Math.floor((x + 50) / 3), gy = Math.floor((y + 50) / 3);
+    const cx = gx * 3 - 50 + hash3(gx, gy, s) * 3, cy = gy * 3 - 50 + hash3(gx, gy, s + 1) * 3;
+    const lx = (x + 0.5 - cx) / 2.2, ly = (y + 0.5 - cy) / 2.2;
+    const lit = (-0.55 * nx - 0.5 * ny + 0.67 * nz) * 0.7 + (-0.6 * lx - 0.6 * ly) * 0.3;
+    const t = (dense ? 0.72 : 0.6) - 0.72 * lit;
+    ink[q] = t > 0.6 * bay(x, y) + 0.4 * hash3(x, y, s + 2) ? 1 : 0;
+    if (ink[q] && hash3(x, y, s + 3) < 0.035) ink[q] = 0;
+  }
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    const q = y * w + x; if (!inside[q]) continue;
+    const edge = x === 0 || y === 0 || x === w - 1 || y === h - 1 || !inside[q - 1] || !inside[q + 1] || !inside[q - w] || !inside[q + w];
+    put(S, x + x0, y + y0, edge || ink[q], key);
+  }
+}
+function line(S, x0, y0, x1, y1, key) {
+  const n = Math.max(Math.abs(x1 - x0), Math.abs(y1 - y0)) | 0 || 1;
+  for (let k = 0; k <= n; k++) put(S, Math.round(x0 + (x1 - x0) * k / n), Math.round(y0 + (y1 - y0) * k / n), 1, key);
+}
+function drawProp(S, p, bx, by, key) {
+  const rr = rng(p.seed), s = p.seed % 9973;
+  switch (p.type) {
+    case 'tree': {
+      const cr = p.sz, th = Math.round(cr * (0.7 + rr() * 0.5)) + 2, lean = (rr() - 0.5) * 2;
+      for (let k = 0; k <= th + 1; k++) { const xx = bx + Math.round(lean * k / th); put(S, xx, by - k, 1, key); if (cr > 6.5) put(S, xx + 1, by - k, 1, key); }
+      put(S, bx - 1, by, 1, key); put(S, bx + 1 + (cr > 6.5), by, 1, key);
+      const cx = bx + lean + 0.5, cy = by - th - cr * 0.7, blobs = [{ x: cx, y: cy, r: cr * 0.78 }];
+      const nb = 4 + (rr() * 5 | 0);
+      for (let k = 0; k < nb; k++) { const a = rr() * 6.283, d = cr * (0.25 + rr() * 0.4); blobs.push({ x: cx + Math.cos(a) * d * 1.25, y: cy + Math.sin(a) * d * 0.8, r: cr * (0.35 + rr() * 0.3) }); }
+      line(S, bx + lean, by - th, bx + lean - cr * 0.5, by - th - cr * 0.5, key);
+      canopy(S, blobs, key, rr, s, false);
+      break;
+    }
+    case 'conifer': {
+      const hT = Math.round(p.sz * 2.4 + 4), wB = p.sz * 0.95, layers = 3 + (rr() * 2 | 0), trunk = 2;
+      for (let k = 0; k <= trunk; k++) put(S, bx, by - k, 1, key);
+      const top = by - trunk - hT;
+      const inside = (x, y) => {
+        if (y < top || y > by - trunk) return false;
+        const f = (y - top) / hT, li = Math.min(layers - 1, Math.floor(f * layers)), lf = f * layers - li;
+        const w = wB * (0.25 + 0.75 * f) * (0.55 + 0.45 * lf) + (hash3(x, li, s) < 0.3 ? 0.6 : 0);
+        return Math.abs(x + 0.5 - bx - 0.5) <= w;
+      };
+      for (let y = top - 1; y <= by - trunk; y++) for (let x = Math.floor(bx - wB - 2); x <= bx + wB + 2; x++) {
+        if (!inside(x, y)) continue;
+        const edge = !inside(x - 1, y) || !inside(x + 1, y) || !inside(x, y - 1) || !inside(x, y + 1);
+        const f = (y - top) / hT, lf = (f * layers) % 1, dx = (x - bx) / (wB * (0.3 + 0.7 * f) + 0.5);
+        const t = 0.5 + dx * 0.38 + lf * 0.25;
+        put(S, x, y, edge || t > 0.55 * bay(x, y) + 0.45 * hash3(x, y, s), key);
+      }
+      break;
+    }
+    case 'cypress': {
+      const ry = p.sz * 1.5 + 3, rx = Math.max(1.8, p.sz * 0.42), cy = by - 2 - ry;
+      put(S, bx, by, 1, key); put(S, bx, by - 1, 1, key);
+      const blobs = [];
+      for (let k = 0; k < 5; k++) blobs.push({ x: bx + 0.5 + (rr() - 0.5) * 0.8, y: cy - ry * 0.6 + k * ry * 0.3, r: rx * (k === 0 ? 0.75 : 1) * (0.85 + rr() * 0.3) });
+      canopy(S, blobs, key, rr, s, true);
+      break;
+    }
+    case 'bush': {
+      const r0 = p.sz, cy = by - r0 * 0.75, blobs = [{ x: bx + 0.5, y: cy, r: r0 }];
+      for (let k = 0; k < 3; k++) blobs.push({ x: bx + 0.5 + (rr() - 0.5) * r0 * 1.4, y: cy + (rr() - 0.3) * r0 * 0.5, r: r0 * (0.55 + rr() * 0.3) });
+      canopy(S, blobs, key, rr, s, false);
+      break;
+    }
+    case 'dead': {
+      const hT = 6 + p.sz * 1.2;
+      const branch = (x, y, a, len, depth) => {
+        const x2 = x + Math.cos(a) * len, y2 = y + Math.sin(a) * len;
+        line(S, x, y, x2, y2, key);
+        if (depth > 0) { branch(x2, y2, a - 0.4 - rr() * 0.5, len * 0.62, depth - 1); branch(x2, y2, a + 0.4 + rr() * 0.5, len * 0.6, depth - 1); }
+      };
+      put(S, bx - 1, by, 1, key); put(S, bx + 1, by, 1, key);
+      branch(bx, by, -Math.PI / 2 + (rr() - 0.5) * 0.3, hT * 0.55, 3);
+      break;
+    }
+    case 'cactus': {
+      const hT = Math.round(p.sz + 2);
+      for (let k = 0; k < hT; k++) { put(S, bx, by - k, 1, key); put(S, bx + 1, by - k, k > 0 && k < hT - 1 ? 0 : 1, key); put(S, bx + 2, by - k, 1, key); }
+      put(S, bx + 1, by - hT, 1, key);
+      const ay = by - Math.round(hT * 0.45);
+      if (rr() < 0.8) { put(S, bx - 1, ay, 1, key); put(S, bx - 2, ay, 1, key); put(S, bx - 2, ay - 1, 1, key); put(S, bx - 2, ay - 2, 1, key); }
+      if (rr() < 0.6) { const by2 = ay - 2; put(S, bx + 3, by2, 1, key); put(S, bx + 4, by2, 1, key); put(S, bx + 4, by2 - 1, 1, key); put(S, bx + 4, by2 - 2, 1, key); }
+      break;
+    }
+    case 'rock': {
+      const rx = p.sz, ry = Math.max(1.2, rx * 0.72), cx = bx + 0.5, cy = by - ry * 0.55;
+      const ins = (x, y) => { const dx = (x + 0.5 - cx) / rx, dy = (y + 0.5 - cy) / ry; return dx * dx + dy * dy < 1 - 0.25 * (hash3(x, y, s) - 0.5); };
+      for (let y = Math.floor(cy - ry - 1); y <= cy + ry + 1; y++) for (let x = Math.floor(cx - rx - 1); x <= cx + rx + 1; x++) {
+        if (!ins(x, y)) continue;
+        const edge = !ins(x - 1, y) || !ins(x + 1, y) || !ins(x, y - 1) || !ins(x, y + 1);
+        const t = 0.4 + 0.45 * ((x + 0.5 - cx) / rx) + 0.3 * ((y + 0.5 - cy) / ry);
+        const hatch = ((x + y) % 3 === 0) ? 0.15 : ((x - y + 99) % 3 === 0) ? 0.45 : 0.75 + 0.25 * bay(x, y);
+        put(S, x, y, edge || t > hatch, key);
+      }
+      break;
+    }
+    case 'reed': {
+      const n = 2 + (rr() * 3 | 0);
+      for (let k = 0; k < n; k++) { const x = bx + k * 2 - n, hh = 2 + (rr() * p.sz | 0); for (let q = 0; q < hh; q++) put(S, x + (q > hh - 2 && rr() < 0.4 ? 1 : 0), by - q, 1, key); }
+      break;
+    }
+    case 'flower': {
+      if (rr() < 0.55) { put(S, bx - 1, by - 2, 1, key); put(S, bx + 1, by - 2, 1, key); put(S, bx, by - 3, 1, key); put(S, bx, by - 1, 1, key); put(S, bx, by - 2, 0, key); }
+      else { put(S, bx, by, 1, key); put(S, bx, by - 1, 1, key); put(S, bx + (rr() < 0.5 ? 1 : -1), by - 2, 1, key); }
+      break;
+    }
+    case 'tuft': {
+      const v = rr() * 4 | 0;
+      if (v === 0) { put(S, bx - 1, by - 1, 1, key); put(S, bx + 1, by - 1, 1, key); put(S, bx, by, 1, key); }
+      else if (v === 1) { put(S, bx, by, 1, key); put(S, bx, by - 1, 1, key); put(S, bx + 1, by - 2, 1, key); put(S, bx - 1, by - 1, 1, key); }
+      else if (v === 2) { put(S, bx, by, 1, key); put(S, bx + 2, by, 1, key); put(S, bx + 1, by - 1, 1, key); put(S, bx + 3, by - 1, 1, key); }
+      else { put(S, bx, by, 1, key); put(S, bx - 1, by - 1, 1, key); }
+      break;
+    }
+    case 'pebble': { put(S, bx, by, 1, key); if (rr() < 0.5) put(S, bx + 1, by, 1, key); break; }
+  }
+}
+
+function drawDebris(T, S, G) {
+  // A few loose rock fragments suspended beneath the island.
+  const r = rng(T.spec.seed + 991), n = T.spec.size === 'S' ? (r() * 3 | 0) : 1 + (r() * 4 | 0);
+  let bottom = 0, xs = [];
+  for (let y = S.Hh - 1; y >= 0 && !xs.length; y--) for (let x = 0; x < S.W; x++) if (S.cov[y * S.W + x]) { bottom = y; xs.push(x); }
+  if (!xs.length) return;
+  for (let k = 0; k < n; k++) {
+    const cx = xs[0] + (r() - 0.5) * S.W * 0.45, cy = bottom + 5 + r() * (PAD_B - 10), rad = 0.8 + r() * 2;
+    for (let y = Math.floor(cy - rad - 1); y <= cy + rad + 1; y++) for (let x = Math.floor(cx - rad - 1); x <= cx + rad + 1; x++) {
+      if (Math.hypot((x + 0.5 - cx) * 0.9, y + 0.5 - cy) < rad) put(S, x, y, !(x < cx - rad * 0.3 && y < cy - rad * 0.3 && rad > 1.5), 0);
+    }
+  }
+}
+
+/* ---- Walkability, character region ---- */
+function buildWalk(T) {
+  const { N, mask, H, M, SOL, D } = T;
+  const walk = new Uint8Array(N * N), solid = new Uint8Array(N * N);
+  for (let c = 0; c < N * N; c++) if (SOL[c]) solid[c] = 1;
+  for (let rep = 0; rep < 1; rep++) { const s2 = solid.slice(); for (let c = N; c < N * N - N; c++) if (s2[c - 1] || s2[c + 1] || s2[c - N] || s2[c + N]) solid[c] = 1; }
+  const minD = T.spec.size === 'S' ? 2 : 2.6;
+  for (let c = 0; c < N * N; c++) walk[c] = mask[c] && !solid[c] && M[c] !== MAT.WATER && D[c] >= minD ? 1 : 0;
+  for (const p of T.props) {
+    const rad = BLOCKERS[p.type]; if (!rad) continue;
+    const rr = p.type === 'rock' ? p.sz * 0.75 + 0.6 : rad;
+    for (let j = Math.floor(p.j - rr - 1); j <= p.j + rr + 1; j++) for (let i = Math.floor(p.i - rr - 1); i <= p.i + rr + 1; i++) {
+      const c = idx(T, i, j); if (c >= 0 && Math.hypot(i - p.i, j - p.j) <= rr) walk[c] = 0;
+    }
+  }
+  // largest connected region with gentle steps
+  const lab = new Int32Array(N * N), stack = new Int32Array(N * N);
+  let best = 0, bestN = 0, id = 0;
+  for (let c = 0; c < N * N; c++) {
+    if (!walk[c] || lab[c]) continue;
+    id++; let sp = 0, n = 0; stack[sp++] = c; lab[c] = id;
+    while (sp) {
+      const q = stack[--sp]; n++;
+      for (const o of [1, -1, N, -N]) {
+        const w = q + o; if (w < 0 || w >= N * N || !walk[w] || lab[w]) continue;
+        if (Math.abs(H[w] - H[q]) > 1.3) continue;
+        lab[w] = id; stack[sp++] = w;
+      }
+    }
+    if (n > bestN) { bestN = n; best = id; }
+  }
+  const region = new Uint8Array(N * N), cells = [];
+  for (let c = 0; c < N * N; c++) if (lab[c] === best && best) { region[c] = 1; cells.push(c); }
+  return { region, cells };
+}
+
+/* ---- Full island sprite pipeline ---- */
+function generateSprite(spec) { const it = spriteJob(spec); let r; do { r = it.next(); } while (!r.done); return r.value; }
+function* spriteJob(spec) {
+  const T = yield* buildTerrain(spec);
+  decorate(T); yield;
+  const G = rasterize(T); yield;
+  const { S, water } = yield* shadeIsland(T, G);
+  yield;
+  // props sorted back-to-front by depth key
+  const props = T.props.slice().sort((a, b) => (a.i + a.j) - (b.i + b.j));
+  for (const p of props) {
+    const c = p.j * T.N + p.i;
+    const bx = p.i - p.j + G.ox, by = Math.floor((p.i + p.j) * 0.5 - T.H[c]) + G.oy;
+    drawProp(S, p, bx, by, p.i + p.j + 1);
+  }
+  drawDebris(T, S, G);
+  // crop
+  let x0 = 1e9, y0 = 1e9, x1 = -1, y1 = -1;
+  for (let y = 0; y < S.Hh; y++) for (let x = 0; x < S.W; x++) if (S.cov[y * S.W + x]) { if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y; }
+  x0 = Math.max(0, x0 - 1); y0 = Math.max(0, y0 - 1); x1 = Math.min(S.W - 1, x1 + 1); y1 = Math.min(S.Hh - 1, y1 + 1);
+  const w = x1 - x0 + 1, h = y1 - y0 + 1;
+  const cov = new Uint8Array(w * h), ink = new Uint8Array(w * h), key = new Int16Array(w * h);
+  const img = new ImageData(w, h), d = img.data;
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    const p = (y + y0) * S.W + x + x0, q = y * w + x;
+    cov[q] = S.cov[p]; ink[q] = S.ink[p]; key[q] = S.cov[p] ? S.key[p] : -1;
+    if (cov[q]) { const o = q * 4; if (ink[q]) { d[o] = 0x22; d[o + 1] = 0; d[o + 2] = 0xff; } else { d[o] = 255; d[o + 1] = 255; d[o + 2] = 255; } d[o + 3] = 255; }
+  }
+  const canvas = document.createElement('canvas');
+  canvas.width = w; canvas.height = h;
+  canvas.getContext('2d').putImageData(img, 0, 0);
+  const ax = Math.floor(w / 2), ay = Math.floor(h / 2);
+  // collision footprint: grid of circles covering the silhouette
+  const g = 8, rad = g * 0.72, circ = [], edge = [];
+  const gw = Math.ceil(w / g), gh = Math.ceil(h / g), occ = new Uint8Array(gw * gh);
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) if (cov[y * w + x]) occ[((y / g) | 0) * gw + ((x / g) | 0)] = 1;
+  let br = 0;
+  for (let gy = 0; gy < gh; gy++) for (let gx = 0; gx < gw; gx++) {
+    if (!occ[gy * gw + gx]) continue;
+    const cx = gx * g + g / 2 - ax, cy = gy * g + g / 2 - ay;
+    circ.push(cx, cy, rad);
+    const isEdge = gx === 0 || gy === 0 || gx === gw - 1 || gy === gh - 1 || !occ[gy * gw + gx - 1] || !occ[gy * gw + gx + 1] || !occ[(gy - 1) * gw + gx] || !occ[(gy + 1) * gw + gx];
+    if (isEdge) edge.push(cx, cy, rad);
+    br = Math.max(br, Math.hypot(cx, cy) + rad);
+  }
+  // outline points for particles
+  const rim = [];
+  for (let y = 1; y < h - 1; y++) for (let x = 1; x < w - 1; x++) {
+    const q = y * w + x; if (!cov[q]) continue;
+    if (!cov[q - 1] || !cov[q + 1] || !cov[q - w] || !cov[q + w]) rim.push(x - ax, y - ay);
+  }
+  const waterPx = new Int16Array(water.length);
+  for (let k = 0; k < water.length; k += 2) { waterPx[k] = water[k] - x0; waterPx[k + 1] = water[k + 1] - y0; }
+  const walk = buildWalk(T);
+  const trees = T.props.filter((p) => p.type === 'tree' || p.type === 'conifer' || p.type === 'cypress').map((p) => [p.i, p.j]);
+  return {
+    canvas, w, h, ax, ay, cov, ink, key,
+    circ: new Float32Array(circ), edge: new Float32Array(edge), br,
+    rim: new Int16Array(rim), water: waterPx,
+    N: T.N, H: T.H, D: T.D, mask: T.mask, ox: G.ox - x0, oy: G.oy - y0,
+    region: walk.region, cells: walk.cells, trees,
+  };
+}
+
+/* =====================================================================
+   6. CHARACTER ANIMATION + NAVIGATION (island-local coordinates)
+   ===================================================================== */
+const FR = (rows) => { const px = []; const h = rows.length; rows.forEach((r, y) => [...r].forEach((ch, x) => { if (ch === 'X') px.push(x - 4, y - h + 1); })); return px; };
+const FIGURE = '#C95454';
+const HEAD = ['....XXX..', '...XXXX..', '...XXXX..', '....XX...'];
+const T5 = '..XXXXX..', BODY = [T5, T5, T5, T5, T5];
+const LEGS = ['..XX.XX..', '..XX.XX..', '..XX.XX..', '..XX.XX..', '..XX.XX..', '..XX.XX..'];
+const STRIDE = ['..XX.XX..', '.XX...XX.', '.XX...XX.', 'XX.....XX', 'XX.....XX', 'XX.....XX'];
+const PASS = ['...XXX...', '...XXX...', '....XX...', '....XX...', '...XXX...', '...XX....'];
+const PASS2 = ['...XXX...', '...XXX...', '...XX....', '...XX....', '...XXX...', '....XX...'];
+const FRAMES = {
+  stand: FR([...HEAD, ...BODY, ...LEGS]),
+  look:  FR([...HEAD, T5, '..XXXXXXX', T5, T5, T5, ...LEGS]),
+  turn:  FR(['...XXX...', '..XXXXX..', '..XXXXX..', '...XXX...', '.XXXXXXX.', 'X.XXXXX.X', '..XXXXX..', '..XXXXX..', '..XXXXX..', ...LEGS]),
+  walk: [
+    FR([...HEAD, T5, '..XXXXXX.', '..XXXXXX.', T5, T5, ...STRIDE]),
+    FR([...HEAD, ...BODY, ...PASS]),
+    FR([...HEAD, T5, '.XXXXXX..', '.XXXXXX..', T5, T5, ...STRIDE]),
+    FR([...HEAD, ...BODY, ...PASS2]),
+  ],
+};
+const BEHAVIORS = ['wander', 'gazer', 'trees', 'pauser', 'circler', 'fidget'];
+
+function makeCharacter(isl) {
+  const r = rng(isl.spec.seed + 4242);
+  const beh = BEHAVIORS[(r() * BEHAVIORS.length) | 0];
+  return {
+    r, beh, i: 0, j: 0, ti: 0, tj: 0, state: 'idle', timer: 0.3 + r() * 2.5,
+    speed: 2.4 + r() * 3.2, face: r() < 0.5 ? 1 : -1, anim: r() * 4, cadence: 0.85 + r() * 0.4,
+    ang: r() * 6.283, turns: 0, ready: false,
+  };
+}
+function walkable(sp, i, j) {
+  const ii = Math.round(i), jj = Math.round(j);
+  if (ii < 0 || jj < 0 || ii >= sp.N || jj >= sp.N) return false;
+  return sp.region[jj * sp.N + ii] === 1;
+}
+function clearLine(sp, i0, j0, i1, j1) {
+  const n = Math.ceil(Math.hypot(i1 - i0, j1 - j0) * 2);
+  let ph = sp.H[Math.round(j0) * sp.N + Math.round(i0)];
+  for (let k = 1; k <= n; k++) {
+    const i = i0 + (i1 - i0) * k / n, j = j0 + (j1 - j0) * k / n;
+    if (!walkable(sp, i, j)) return false;
+    const h = sp.H[Math.round(j) * sp.N + Math.round(i)];
+    if (Math.abs(h - ph) > 1.4) return false;
+    ph = h;
+  }
+  return true;
+}
+function pickTarget(ch, sp) {
+  const r = ch.r, cells = sp.cells, N = sp.N;
+  if (!cells.length) return false;
+  for (let t = 0; t < 26; t++) {
+    let c;
+    if (ch.beh === 'gazer' && r() < 0.75) {
+      c = cells[(r() * cells.length) | 0]; if (sp.D[c] > 4.2) continue;
+    } else if (ch.beh === 'trees' && sp.trees.length && r() < 0.8) {
+      const [ti, tj] = sp.trees[(r() * sp.trees.length) | 0], a = r() * 6.283, d = 3 + r() * 3;
+      const ii = Math.round(ti + Math.cos(a) * d), jj = Math.round(tj + Math.sin(a) * d);
+      if (!walkable(sp, ii, jj)) continue; c = jj * N + ii;
+    } else if (ch.beh === 'circler') {
+      ch.ang += 0.55 + r() * 0.3;
+      let ci = 0, cj = 0; for (let k = 0; k < cells.length; k += 7) { ci += cells[k] % N; cj += (cells[k] / N) | 0; }
+      const cnt = Math.ceil(cells.length / 7); ci /= cnt; cj /= cnt;
+      const rad = Math.sqrt(cells.length / Math.PI) * 0.55;
+      const ii = Math.round(ci + Math.cos(ch.ang) * rad), jj = Math.round(cj + Math.sin(ch.ang) * rad);
+      if (!walkable(sp, ii, jj)) continue; c = jj * N + ii;
+    } else {
+      c = cells[(r() * cells.length) | 0];
+    }
+    const ti = c % N, tj = (c / N) | 0, dist = Math.hypot(ti - ch.i, tj - ch.j);
+    const maxD = ch.beh === 'pauser' || ch.beh === 'fidget' ? 12 : 40;
+    if (dist < 2 || dist > maxD) continue;
+    if (!clearLine(sp, ch.i, ch.j, ti, tj)) continue;
+    ch.ti = ti; ch.tj = tj; return true;
+  }
+  return false;
+}
+function updateCharacter(ch, sp, dt) {
+  if (!ch.ready) {
+    if (!sp.cells.length) return;
+    const c = sp.cells[(ch.r() * sp.cells.length) | 0];
+    ch.i = c % sp.N; ch.j = (c / sp.N) | 0; ch.ready = true;
+  }
+  ch.anim += dt;
+  if (ch.state === 'idle' || ch.state === 'gaze') {
+    ch.timer -= dt;
+    if (ch.beh === 'fidget' && ch.state === 'idle' && ch.r() < dt * 0.9) { ch.face = -ch.face; ch.turnT = 0.35; }
+    if (ch.turnT > 0) ch.turnT -= dt;
+    if (ch.timer <= 0) {
+      if (pickTarget(ch, sp)) {
+        ch.state = 'walk';
+        const sx = (ch.ti - ch.i) - (ch.tj - ch.j);
+        const nf = sx >= 0 ? 1 : -1;
+        if (nf !== ch.face) { ch.face = nf; ch.turnT = 0.3; }
+        ch.walkLeft = ch.beh === 'fidget' ? 1 + ch.r() * 2 : ch.beh === 'pauser' ? 1.5 + ch.r() * 2.5 : 99;
+      } else ch.timer = 0.6 + ch.r();
+    }
+    return;
+  }
+  if (ch.turnT > 0) { ch.turnT -= dt; return; }
+  const di = ch.ti - ch.i, dj = ch.tj - ch.j, dist = Math.hypot(di, dj);
+  ch.walkLeft -= dt;
+  const step = ch.speed * dt;
+  if (dist <= step || ch.walkLeft <= 0) {
+    if (dist <= step) { ch.i = ch.ti; ch.j = ch.tj; }
+    arrive(ch, sp);
+    return;
+  }
+  const ni = ch.i + di / dist * step, nj = ch.j + dj / dist * step;
+  if (!walkable(sp, ni, nj)) { ch.state = 'idle'; ch.timer = 0.5 + ch.r(); return; }
+  ch.i = ni; ch.j = nj;
+}
+function arrive(ch, sp) {
+  const r = ch.r;
+  ch.state = 'idle';
+  switch (ch.beh) {
+    case 'gazer': {
+      const N = sp.N, c = Math.round(ch.j) * N + Math.round(ch.i);
+      if (sp.D[c] <= 4.5) {
+        const gi = sp.D[c + 1] - sp.D[c - 1], gj = sp.D[c + N] - sp.D[c - N];
+        const sx = -gi + gj; ch.face = sx >= 0 ? 1 : -1; ch.state = 'gaze'; ch.timer = 6 + r() * 9;
+      } else ch.timer = 0.8 + r() * 1.5;
+      break;
+    }
+    case 'pauser': ch.timer = 5 + r() * 10; break;
+    case 'fidget': ch.timer = 1.5 + r() * 3; break;
+    case 'circler': ch.timer = 0.1 + r() * 0.6; break;
+    case 'trees': ch.timer = 2 + r() * 5; break;
+    default: ch.timer = 0.8 + r() * 3.5;
+  }
+}
+function characterPixels(ch) {
+  let frame, lift = 0;
+  if (ch.state === 'walk' && !(ch.turnT > 0)) {
+    const f = Math.floor(ch.anim * ch.speed * 0.95 * ch.cadence) & 3;
+    frame = FRAMES.walk[f]; lift = (f & 1) ? -1 : 0;
+  } else if (ch.turnT > 0) frame = FRAMES.turn;
+  else if (ch.state === 'gaze') frame = FRAMES.look;
+  else frame = FRAMES.stand;
+  return { frame, lift };
+}
+
+/* =====================================================================
+   7. INFINITE WORLD (deterministic chunks, curated origin, persistence)
+   ===================================================================== */
+const CH = 300, RAD = { S: 40, M: 60, L: 90 };
+const CURATED = [
+  { x: -34, y: 17,   size: 'L', arch: 'ruins',       seed: 1101, under: 'cone' },
+  { x: 202, y: -81,  size: 'M', arch: 'forest',      seed: 2207 },
+  { x: -220, y: -77,  size: 'M', arch: 'observatory', seed: 3303 },
+  { x: 198, y: 99,  size: 'M', arch: 'lake',        seed: 4409 },
+  { x: -225, y: 111,  size: 'S', arch: 'desert',      seed: 5501 },
+  { x: 66, y: -166, size: 'S', arch: 'rocky',       seed: 6607 },
+  { x: 342, y: 14,   size: 'S', arch: 'fragment',    seed: 7703 },
+  { x: 40, y: 196,  size: 'S', arch: 'garden',      seed: 8809 },
+  { x: -420, y: 30,   size: 'M', arch: 'meadow',      seed: 9901 },
+  { x: 388, y: -150, size: 'M', arch: 'plateau',     seed: 1013 },
+  { x: 378, y: 196,  size: 'S', arch: 'forest',      seed: 1117 },
+  { x: -185, y: -361, size: 'L', arch: 'garden',      seed: 1223 },
+  { x: 193, y: 395,  size: 'M', arch: 'rocky',       seed: 1327 },
+  { x: -372, y: -226, size: 'M', arch: 'desert',      seed: 1429 },
+];
+CURATED.forEach((c, k) => { c.id = 'c' + k; c.pri = 2; });
+const ARCH_BY_SIZE = {
+  S: ['meadow', 'rocky', 'rocky', 'desert', 'fragment', 'fragment', 'forest', 'garden', 'plateau'],
+  M: ['meadow', 'forest', 'rocky', 'ruins', 'garden', 'lake', 'desert', 'observatory', 'plateau', 'fragment'],
+  L: ['ruins', 'lake', 'forest', 'garden', 'plateau', 'meadow', 'observatory'],
+};
+const inZone = (cx, cy) => { const x = (cx + 0.5) * CH, y = (cy + 0.5) * CH; return (x / 540) ** 2 + (y / 420) ** 2 < 1; };
+const chunkOf = (x, y) => [Math.floor(x / CH), Math.floor(y / CH)];
+const ckey = (cx, cy) => cx + ',' + cy;
+const candCache = new Map();
+function rawCands(cx, cy) {
+  const k = ckey(cx, cy);
+  let v = candCache.get(k); if (v) return v;
+  v = CURATED.filter((c) => { const [a, b] = chunkOf(c.x, c.y); return a === cx && b === cy; });
+  if (!inZone(cx, cy)) {
+    const r = rng((hash3(cx, cy, WORLD_SEED) * 4294967295) >>> 0);
+    const dens = 0.7 + 0.6 * fbm(cx * 0.21 + 40, cy * 0.21 - 12, WORLD_SEED, 3);
+    const n = clamp(Math.floor(dens * 2.7 + r()), 2, 5);
+    for (let q = 0; q < n; q++) {
+      const roll = r(), size = roll < 0.52 ? 'S' : roll < 0.88 ? 'M' : 'L';
+      const list = ARCH_BY_SIZE[size];
+      v.push({ id: 'p' + cx + '_' + cy + '_' + q, x: (cx + 0.12 + r() * 0.76) * CH, y: (cy + 0.12 + r() * 0.76) * CH, size, arch: list[(r() * list.length) | 0], seed: (r() * 2147483647) | 0, pri: r() });
+    }
+  }
+  if (candCache.size > 6000) candCache.clear();
+  candCache.set(k, v);
+  return v;
+}
+function chunkCands(cx, cy) {
+  const own = rawCands(cx, cy), out = [];
+  const around = [];
+  for (let b = -1; b <= 1; b++) for (let a = -1; a <= 1; a++) around.push(...rawCands(cx + a, cy + b));
+  for (const c of own) {
+    let ok = true;
+    if (c.pri === 2) { out.push(c); continue; }
+    for (const o of around) {
+      if (o === c || o.pri < c.pri || (o.pri === c.pri && o.id < c.id)) continue;
+      if (Math.hypot(o.x - c.x, o.y - c.y) < RAD[o.size] + RAD[c.size] + 6) { ok = false; break; }
+    }
+    if (ok) out.push(c);
+  }
+  return out;
+}
+function specById(id) {
+  if (id[0] === 'c') return CURATED[+id.slice(1)];
+  const [cx, cy] = id.slice(1).split('_').map(Number);
+  return rawCands(cx, cy).find((c) => c.id === id);
+}
+
+const world = {
+  islands: new Map(), loaded: new Set(), moved: new Map(), movedByChunk: new Map(),
+  sprites: new Map(), queue: [],
+};
+function spawnIsland(spec, x, y) {
+  if (world.islands.has(spec.id)) return;
+  const r = rng(spec.seed + 77);
+  const isl = {
+    id: spec.id, spec, x, y, vx: 0, vy: 0, sp: null, moved: world.moved.has(spec.id),
+    bobA: 1.2 + r() * 1.3, bobF: 0.07 + r() * 0.09, bobP: r() * 6.283, drA: 0.6 + r() * 1.4, drF: 0.025 + r() * 0.04, drP: r() * 6.283,
+    bobW: 1, drag: false, active: false, fade: 1, fadeDelay: 0, ch: null,
+  };
+  isl.ch = makeCharacter(isl);
+  world.islands.set(spec.id, isl);
+  const cached = world.sprites.get(spec.id);
+  if (cached) attachSprite(isl, cached, false); else world.queue.push(isl);
+}
+function attachSprite(isl, sp, fadeIn) {
+  isl.sp = sp;
+  world.sprites.delete(isl.id); world.sprites.set(isl.id, sp);
+  while (world.sprites.size > 48) { const k = world.sprites.keys().next().value; if (world.islands.has(k)) { const v = world.sprites.get(k); world.sprites.delete(k); world.sprites.set(k, v); break; } world.sprites.delete(k); }
+  isl.fade = fadeIn ? 0 : 1;
+  // never begin life overlapping anything: ease it away while off-screen
+  let guard = 0;
+  while (guard++ < 400) {
+    let px = 0, py = 0, hit = false;
+    for (const o of world.islands.values()) {
+      if (o === isl || !o.sp) continue;
+      const g = gapInfo(isl, o, false);
+      if (g.gap < MARGIN + 2) { const w = MARGIN + 2 - g.gap + 1; px -= g.nx * w; py -= g.ny * w; hit = true; }
+    }
+    if (!hit) break;
+    const l = Math.hypot(px, py) || 1, st = Math.min(6, l);
+    isl.x += px / l * st; isl.y += py / l * st; isl.moved = true;
+  }
+  const clear = () => { for (const o of world.islands.values()) if (o !== isl && o.sp && gapInfo(isl, o, false).gap < MARGIN + 2) return false; return true; };
+  if (!clear()) { // wedged: search outward for the nearest free spot
+    const ox = isl.x, oy = isl.y;
+    search: for (let rad = 8; rad < 900; rad += 8) for (let k = 0; k < 16; k++) {
+      const a = k / 16 * 6.283 + rad * 0.01;
+      isl.x = ox + Math.cos(a) * rad; isl.y = oy + Math.sin(a) * rad;
+      if (clear()) break search;
+    }
+  }
+  if (isl.moved) setMoved(isl);
+}
+function setMoved(isl) { isl.moved = true; world.moved.set(isl.id, { x: isl.x, y: isl.y }); }
+function unloadIsland(isl) {
+  if (isl.moved) {
+    world.moved.set(isl.id, { x: isl.x, y: isl.y });
+    const k = ckey(...chunkOf(isl.x, isl.y));
+    if (!world.movedByChunk.has(k)) world.movedByChunk.set(k, new Set());
+    world.movedByChunk.get(k).add(isl.id);
+  }
+  world.islands.delete(isl.id);
+  const qi = world.queue.indexOf(isl); if (qi >= 0) world.queue.splice(qi, 1);
+  if (job && job.isl === isl) job = null;
+}
+function loadChunk(cx, cy) {
+  const k = ckey(cx, cy);
+  if (world.loaded.has(k)) return;
+  world.loaded.add(k);
+  for (const c of chunkCands(cx, cy)) if (!world.moved.has(c.id)) spawnIsland(c, c.x, c.y);
+  const mv = world.movedByChunk.get(k);
+  if (mv) { for (const id of mv) { const p = world.moved.get(id), spec = specById(id); if (spec && p) spawnIsland(spec, p.x, p.y); } world.movedByChunk.delete(k); }
+}
+function updateChunks() {
+  const v = viewRect(), m = CH * 0.9;
+  const [a0, b0] = chunkOf(v.x0 - m, v.y0 - m), [a1, b1] = chunkOf(v.x1 + m, v.y1 + m);
+  for (let b = b0; b <= b1; b++) for (let a = a0; a <= a1; a++) loadChunk(a, b);
+  const um = CH * 2.6;
+  const [u0, w0] = chunkOf(v.x0 - um, v.y0 - um), [u1, w1] = chunkOf(v.x1 + um, v.y1 + um);
+  for (const k of world.loaded) { const [a, b] = k.split(',').map(Number); if (a < u0 || a > u1 || b < w0 || b > w1) world.loaded.delete(k); }
+  for (const isl of [...world.islands.values()]) {
+    if (isl.drag) continue;
+    const [a, b] = chunkOf(isl.x, isl.y);
+    if (a < u0 || a > u1 || b < w0 || b > w1) unloadIsland(isl);
+  }
+}
+let job = null;
+function processQueue(budgetMs) {
+  const t0 = performance.now();
+  while (performance.now() - t0 < budgetMs) {
+    if (!job) {
+      if (!world.queue.length) return;
+      const v = viewRect(), cx = (v.x0 + v.x1) / 2, cy = (v.y0 + v.y1) / 2;
+      world.queue.sort((a, b) => Math.hypot(a.x - cx, a.y - cy) - Math.hypot(b.x - cx, b.y - cy));
+      const isl = world.queue.shift();
+      job = { isl, it: spriteJob(isl.spec) };
+    }
+    const r = job.it.next();
+    if (r.done) {
+      const isl = job.isl, sp = r.value; job = null;
+      if (!world.islands.has(isl.id)) continue;
+      const v = viewRect();
+      const onScreen = isl.x + sp.w / 2 > v.x0 && isl.x - sp.w / 2 < v.x1 && isl.y + sp.h / 2 > v.y0 && isl.y - sp.h / 2 < v.y1;
+      attachSprite(isl, sp, onScreen);
+    }
+  }
+}
+
+/* =====================================================================
+   8. CAMERA NAVIGATION (pan with inertia, cursor-anchored pixel zoom)
+   ===================================================================== */
+const canvas = document.getElementById('world');
+const ctx = canvas.getContext('2d', { alpha: false });
+const buf = document.createElement('canvas');
+const bctx = buf.getContext('2d');
+const cam = { x: 0, y: 6, vx: 0, vy: 0, scale: 4, target: 4, anchor: null, wheelT: 0, snapped: true };
+let dpr = 1, devW = 0, devH = 0, zMin = 1, zMax = 12;
+function resize() {
+  dpr = Math.min(window.devicePixelRatio || 1, 3);
+  devW = Math.round(innerWidth * dpr); devH = Math.round(innerHeight * dpr);
+  canvas.width = devW; canvas.height = devH;
+  zMin = Math.max(1, Math.round(dpr)); zMax = Math.round(dpr * 8);
+}
+function defaultScale() { return clamp(Math.round(dpr * Math.min(innerWidth / 740, innerHeight / 470)), Math.max(2, zMin), zMax); }
+function viewRect() {
+  const hw = devW / (2 * cam.scale), hh = devH / (2 * cam.scale);
+  return { x0: cam.x - hw, x1: cam.x + hw, y0: cam.y - hh, y1: cam.y + hh };
+}
+function screenToWorld(px, py) { return { x: cam.x + (px - devW / 2) / cam.scale, y: cam.y + (py - devH / 2) / cam.scale }; }
+function updateCamera(dt, now) {
+  if (!pointer.panning && (cam.vx || cam.vy)) {
+    cam.x += cam.vx * dt; cam.y += cam.vy * dt;
+    const k = Math.exp(-dt * 5.5); cam.vx *= k; cam.vy *= k;
+    if (Math.hypot(cam.vx, cam.vy) < 2) cam.vx = cam.vy = 0;
+  }
+  if (!cam.snapped && now - cam.wheelT > 170) { cam.target = clamp(Math.round(cam.target), zMin, zMax); cam.snapped = true; }
+  if (cam.scale !== cam.target) {
+    const a = cam.anchor || { x: devW / 2, y: devH / 2 };
+    const before = screenToWorld(a.x, a.y);
+    cam.scale += (cam.target - cam.scale) * (1 - Math.exp(-dt * 13));
+    if (Math.abs(cam.scale - cam.target) < 0.003) cam.scale = cam.target;
+    const after = screenToWorld(a.x, a.y);
+    cam.x += before.x - after.x; cam.y += before.y - after.y;
+  }
+}
+
+/* =====================================================================
+   9. ISLAND DRAGGING + 10. COLLISION AVOIDANCE
+   Footprints are circle sets covering each silhouette. All motion is
+   sub-stepped and resolved, so a state with overlap is never accepted.
+   ===================================================================== */
+const MARGIN = 9; // > combined ambient float amplitude, so floating never touches
+function gapInfo(A, B, edgeOnly) {
+  const dx0 = B.x - A.x, dy0 = B.y - A.y, cd = Math.hypot(dx0, dy0);
+  if (cd - A.sp.br - B.sp.br > 60) return { gap: 1e9 };
+  const ca = edgeOnly ? A.sp.edge : A.sp.circ, cb = edgeOnly ? B.sp.edge : B.sp.circ;
+  let best = 1e9, bi = 0, bj = 0, bdx = 0, bdy = 0, bd = 1;
+  for (let a = 0; a < ca.length; a += 3) {
+    const ax = A.x + ca[a], ay = A.y + ca[a + 1], ar = ca[a + 2];
+    if (Math.hypot(ax - B.x, ay - B.y) - ar - B.sp.br > best + 1) continue;
+    for (let b = 0; b < cb.length; b += 3) {
+      const dx = B.x + cb[b] - ax, dy = B.y + cb[b + 1] - ay;
+      const d = Math.sqrt(dx * dx + dy * dy), g = d - ar - cb[b + 2];
+      if (g < best) { best = g; bi = a; bj = b; bdx = dx; bdy = dy; bd = d || 1; }
+    }
+  }
+  const nx = bdx / bd, ny = bdy / bd; // from A toward B
+  const mx = A.x + ca[bi] + nx * (ca[bi + 2] + best / 2), my = A.y + ca[bi + 1] + ny * (ca[bi + 2] + best / 2);
+  return { gap: best, nx, ny, mx, my };
+}
+function neighborsOf(A, reach) {
+  const out = [];
+  for (const o of world.islands.values()) if (o !== A && o.sp && Math.hypot(o.x - A.x, o.y - A.y) < A.sp.br + o.sp.br + reach) out.push(o);
+  return out;
+}
+function penetration(A, nb) {
+  let px = 0, py = 0, maxPen = 0;
+  const ca = A.sp.edge;
+  for (const B of nb) {
+    const cb = B.sp.edge;
+    if (Math.hypot(B.x - A.x, B.y - A.y) - A.sp.br - B.sp.br > MARGIN) continue;
+    for (let a = 0; a < ca.length; a += 3) {
+      const ax = A.x + ca[a], ay = A.y + ca[a + 1], ar = ca[a + 2] + MARGIN;
+      if (Math.hypot(ax - B.x, ay - B.y) - ar - B.sp.br > 0) continue;
+      for (let b = 0; b < cb.length; b += 3) {
+        const dx = ax - B.x - cb[b], dy = ay - B.y - cb[b + 1], rr = ar + cb[b + 2];
+        const d2 = dx * dx + dy * dy;
+        if (d2 >= rr * rr) continue;
+        const d = Math.sqrt(d2) || 0.001, pen = rr - d;
+        px += dx / d * pen; py += dy / d * pen;
+        if (pen > maxPen) maxPen = pen;
+      }
+    }
+  }
+  return { px, py, maxPen };
+}
+function moveIsland(A, dx, dy) {
+  const len = Math.hypot(dx, dy);
+  if (len < 1e-4) return { blocked: false, mx: 0, my: 0 };
+  const nb = neighborsOf(A, len + MARGIN + 12);
+  const n = Math.ceil(len / 2), sx = dx / n, sy = dy / n;
+  const x0 = A.x, y0 = A.y;
+  let blocked = false;
+  for (let k = 0; k < n; k++) {
+    const px = A.x, py = A.y;
+    A.x += sx; A.y += sy;
+    let ok = false;
+    for (let it = 0; it < 6; it++) {
+      const p = penetration(A, nb);
+      if (p.maxPen <= 0.001) { ok = true; break; }
+      blocked = true;
+      const l = Math.hypot(p.px, p.py) || 1;
+      A.x += p.px / l * (p.maxPen + 0.02); A.y += p.py / l * (p.maxPen + 0.02);
+    }
+    if (!ok) { A.x = px; A.y = py; break; }
+    // never let a single sub-step jump more than it was asked to
+    if (Math.hypot(A.x - px, A.y - py) > 4) { A.x = px; A.y = py; break; }
+  }
+  return { blocked, mx: A.x - x0, my: A.y - y0 };
+}
+
+const pointer = { x: 0, y: 0, down: false, panning: false, island: null, gox: 0, goy: 0, lastT: 0, id: null };
+function islandAt(px, py) {
+  const w = screenToWorld(px, py);
+  const list = [...world.islands.values()].filter((i) => i.sp && i.fade > 0.4).sort((a, b) => b.y - a.y);
+  for (const isl of list) {
+    const o = renderOffset(isl, lastNow);
+    const lx = Math.floor(w.x - (Math.round(isl.x + o.x) - isl.sp.ax)), ly = Math.floor(w.y - (Math.round(isl.y + o.y) - isl.sp.ay));
+    if (lx < 0 || ly < 0 || lx >= isl.sp.w || ly >= isl.sp.h) continue;
+    if (isl.sp.cov[ly * isl.sp.w + lx]) return isl;
+    // forgiving 2px reach for thin parts
+    for (const [a, b] of [[2, 0], [-2, 0], [0, 2], [0, -2]]) { const x = lx + a, y = ly + b; if (x >= 0 && y >= 0 && x < isl.sp.w && y < isl.sp.h && isl.sp.cov[y * isl.sp.w + x]) return isl; }
+  }
+  return null;
+}
+canvas.addEventListener('pointerdown', (e) => {
+  if (pointer.down) return;
+  canvas.setPointerCapture(e.pointerId);
+  pointer.id = e.pointerId; pointer.down = true;
+  pointer.x = e.clientX * dpr; pointer.y = e.clientY * dpr; pointer.lastT = performance.now();
+  const isl = islandAt(pointer.x, pointer.y);
+  if (isl) {
+    const w = screenToWorld(pointer.x, pointer.y);
+    pointer.island = isl; pointer.gox = isl.x - w.x; pointer.goy = isl.y - w.y;
+    isl.drag = true; isl.active = true; isl.vx = isl.vy = 0;
+    canvas.style.cursor = 'grabbing';
+  } else {
+    pointer.panning = true; cam.vx = cam.vy = 0;
+  }
+});
+canvas.addEventListener('pointermove', (e) => {
+  const x = e.clientX * dpr, y = e.clientY * dpr, now = performance.now();
+  if (pointer.panning && e.pointerId === pointer.id) {
+    const dt = Math.max(1, now - pointer.lastT) / 1000;
+    const dx = (x - pointer.x) / cam.scale, dy = (y - pointer.y) / cam.scale;
+    cam.x -= dx; cam.y -= dy;
+    cam.vx = cam.vx * 0.6 + (-dx / dt) * 0.4; cam.vy = cam.vy * 0.6 + (-dy / dt) * 0.4;
+  }
+  pointer.x = x; pointer.y = y; pointer.lastT = now;
+  if (!pointer.down) canvas.style.cursor = islandAt(x, y) ? 'grab' : 'default';
+});
+function endPointer(e) {
+  if (!pointer.down || (e && e.pointerId !== pointer.id)) return;
+  pointer.down = false;
+  if (pointer.panning && performance.now() - pointer.lastT > 90) cam.vx = cam.vy = 0;
+  pointer.panning = false;
+  if (pointer.island) { const isl = pointer.island; isl.drag = false; setMoved(isl); pointer.island = null; }
+  canvas.style.cursor = islandAt(pointer.x, pointer.y) ? 'grab' : 'default';
+}
+canvas.addEventListener('pointerup', endPointer);
+canvas.addEventListener('pointercancel', endPointer);
+canvas.addEventListener('wheel', (e) => {
+  e.preventDefault();
+  const dy = e.deltaY * (e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? 400 : 1);
+  const k = e.ctrlKey ? 0.012 : 0.0024;
+  cam.target = clamp(cam.target * Math.exp(-dy * k), zMin, zMax);
+  cam.anchor = { x: e.clientX * dpr, y: e.clientY * dpr }; cam.wheelT = performance.now(); cam.snapped = false;
+}, { passive: false });
+
+function updateIslands(dt) {
+  for (const isl of world.islands.values()) {
+    if (!isl.sp) continue;
+    isl.bobW += ((isl.drag ? 0 : 1) - isl.bobW) * (1 - Math.exp(-dt * 1.6));
+    if (isl.fade < 1) { if (isl.fadeDelay > 0) isl.fadeDelay -= dt; else isl.fade = Math.min(1, isl.fade + dt / 0.85); }
+    if (isl.drag) {
+      const w = screenToWorld(pointer.x, pointer.y);
+      const tx = w.x + pointer.gox, ty = w.y + pointer.goy;
+      let dx = (tx - isl.x) * (1 - Math.exp(-dt * 15)), dy = (ty - isl.y) * (1 - Math.exp(-dt * 15));
+      const l = Math.hypot(dx, dy), cap = 70;
+      if (l > cap) { dx *= cap / l; dy *= cap / l; }
+      const res = moveIsland(isl, dx, dy);
+      const ivx = res.mx / Math.max(dt, 1e-3), ivy = res.my / Math.max(dt, 1e-3);
+      isl.vx = isl.vx * 0.7 + ivx * 0.3; isl.vy = isl.vy * 0.7 + ivy * 0.3;
+      influence(isl, dt);
+    } else if (isl.active) {
+      const res = moveIsland(isl, isl.vx * dt, isl.vy * dt);
+      if (res.blocked) { isl.vx *= 0.5; isl.vy *= 0.5; }
+      const k = Math.exp(-dt * 4.2); isl.vx *= k; isl.vy *= k;
+      const sp = Math.hypot(isl.vx, isl.vy);
+      if (sp > 6) influence(isl, dt);
+      if (sp < 1.5) { isl.vx = isl.vy = 0; isl.active = false; setMoved(isl); }
+    }
+    updateCharacter(isl.ch, isl.sp, dt);
+  }
+}
+// Moving islands gently nudge neighbours and disturb the pixel field between them.
+function influence(A, dt) {
+  const speed = Math.hypot(A.vx, A.vy);
+  for (const B of neighborsOf(A, 50)) {
+    const g = gapInfo(A, B, true);
+    if (g.gap > MARGIN + 30) continue;
+    const close = 1 - clamp((g.gap - MARGIN) / 30, 0, 1);
+    if (!B.drag) {
+      B.vx += g.nx * close * 70 * dt; B.vy += g.ny * close * 70 * dt;
+      B.active = true;
+    }
+    if (!REDUCED && Math.random() < dt * (8 + speed * 0.25) * close) {
+      const n = 1 + (Math.random() * 3 | 0), bx = g.mx + (Math.random() - 0.5) * 10, by = g.my + (Math.random() - 0.5) * 10;
+      for (let k = 0; k < n; k++) spawnParticle(bx + (k % 2), by + (k > 1 ? 1 : 0), (Math.random() - 0.5) * 4, (Math.random() - 0.5) * 4, 0.35 + Math.random() * 0.6);
+    }
+  }
+}
+
+/* =====================================================================
+   11. PARTICLES (pooled, dithered dissolve instead of alpha)
+   ===================================================================== */
+const PMAX = 1600;
+const P = { n: 0, x: new Float32Array(PMAX), y: new Float32Array(PMAX), vx: new Float32Array(PMAX), vy: new Float32Array(PMAX), life: new Float32Array(PMAX), max: new Float32Array(PMAX), thr: new Float32Array(PMAX) };
+function spawnParticle(x, y, vx, vy, life) {
+  if (P.n >= PMAX) return;
+  const k = P.n++;
+  P.x[k] = x; P.y[k] = y; P.vx[k] = vx; P.vy[k] = vy; P.life[k] = life; P.max[k] = life; P.thr[k] = Math.random();
+}
+function updateParticles(dt) {
+  const damp = Math.exp(-dt * 1.8);
+  for (let k = 0; k < P.n; k++) {
+    P.life[k] -= dt;
+    if (P.life[k] <= 0) {
+      const l = --P.n;
+      P.x[k] = P.x[l]; P.y[k] = P.y[l]; P.vx[k] = P.vx[l]; P.vy[k] = P.vy[l]; P.life[k] = P.life[l]; P.max[k] = P.max[l]; P.thr[k] = P.thr[l];
+      k--; continue;
+    }
+    P.vy[k] += 5 * dt; P.vx[k] *= damp; P.vy[k] *= damp;
+    P.x[k] += P.vx[k] * dt; P.y[k] += P.vy[k] * dt;
+  }
+}
+function trail(isl, dt) {
+  if (REDUCED || !isl.sp) return;
+  const sp = Math.hypot(isl.vx, isl.vy);
+  if (sp < 8) return;
+  const rate = Math.min(sp * 0.55, 140), n = Math.floor(rate * dt + Math.random());
+  const rim = isl.sp.rim, ux = isl.vx / sp, uy = isl.vy / sp, o = renderOffset(isl, lastNow);
+  for (let k = 0; k < n; k++) {
+    let best = 0, bv = -1e9;
+    for (let t = 0; t < 4; t++) {
+      const q = ((Math.random() * rim.length / 2) | 0) * 2;
+      const v = -(rim[q] * ux + rim[q + 1] * uy) + rim[q + 1] * 0.4 + Math.random() * 30;
+      if (v > bv) { bv = v; best = q; }
+    }
+    const x = isl.x + o.x + rim[best], y = isl.y + o.y + rim[best + 1];
+    const vx = -isl.vx * 0.06 + (Math.random() - 0.5) * 8, vy = -isl.vy * 0.06 + (Math.random() - 0.3) * 6;
+    const life = 0.45 + Math.random() * 1.1, cl = 1 + (Math.random() * 3 | 0);
+    for (let c = 0; c < cl; c++) spawnParticle(x + (c === 1 ? 1 : 0) - ux * 2, y + (c === 2 ? 1 : 0) - uy * 2, vx, vy, life);
+  }
+}
+
+/* =====================================================================
+   12. AMBIENT FLOATING + RENDER LOOP
+   ===================================================================== */
+function renderOffset(isl, t) {
+  if (REDUCED) return { x: 0, y: 0 };
+  const w = isl.bobW;
+  return {
+    x: Math.sin(t * isl.drF * 6.283 + isl.drP) * isl.drA * w,
+    y: Math.sin(t * isl.bobF * 6.283 + isl.bobP) * isl.bobA * w + Math.sin(t * isl.bobF * 2.7 + isl.drP) * 0.5 * w,
+  };
+}
+const FADE_PAT = [];
+function fadePattern(level) {
+  if (FADE_PAT[level]) return FADE_PAT[level];
+  const c = document.createElement('canvas'); c.width = c.height = 8;
+  const g = c.getContext('2d'), im = g.createImageData(8, 8);
+  for (let k = 0; k < 64; k++) if (BAYER[k] * 64 < level) im.data[k * 4 + 3] = 255;
+  g.putImageData(im, 0, 0);
+  return (FADE_PAT[level] = bctx.createPattern(c, 'repeat'));
+}
+const tmp = document.createElement('canvas'), tctx = tmp.getContext('2d');
+let lastNow = 0;
+
+function drawCharacter(isl, bx, by) {
+  const ch = isl.ch, sp = isl.sp;
+  if (!ch.ready || isl.fade < 0.6) return;
+  const N = sp.N, ii = Math.round(ch.i), jj = Math.round(ch.j);
+  const c = jj * N + ii;
+  const fx = ii - jj + sp.ox, fy = Math.floor((ii + jj) * 0.5 - sp.H[c]) + sp.oy;
+  const { frame, lift } = characterPixels(ch);
+  const key = ii + jj + 2;
+  const set = new Set();
+  for (let k = 0; k < frame.length; k += 2) set.add(((frame[k] * ch.face) + 8) + ((frame[k + 1] + lift + 16) << 5));
+  const vis = (lx, ly) => {
+    const x = fx + lx, y = fy + ly;
+    if (x < 0 || y < 0 || x >= sp.w || y >= sp.h) return true;
+    const q = y * sp.w + x;
+    return !(sp.cov[q] && sp.key[q] > key);
+  };
+  bctx.fillStyle = PAPER;
+  for (const v of set) {
+    const lx = (v & 31) - 8, ly = (v >> 5) - 16;
+    for (const [a, b] of [[1, 0], [-1, 0], [0, -1], [0, 1], [1, -1], [-1, -1], [1, 1], [-1, 1]]) {
+      if (b === 1 && ly === 0) continue;
+      const n = (lx + a + 8) + ((ly + b + 16) << 5);
+      if (!set.has(n) && vis(lx + a, ly + b)) bctx.fillRect(bx + fx + lx + a, by + fy + ly + b, 1, 1);
+    }
+  }
+  bctx.fillStyle = FIGURE;
+  for (const v of set) {
+    const lx = (v & 31) - 8, ly = (v >> 5) - 16;
+    if (vis(lx, ly)) bctx.fillRect(bx + fx + lx, by + fy + ly, 1, 1);
+  }
+}
+function drawWater(isl, bx, by, t) {
+  const sp = isl.sp, wp = sp.water, n = wp.length / 2;
+  if (n < 8) return;
+  const glints = Math.min(14, 2 + (n / 60) | 0);
+  for (let g = 0; g < glints; g++) {
+    const ph = hash3(g, 3, isl.spec.seed), period = 2.2 + ph * 2.5;
+    const slot = Math.floor(t / period + ph * 7), local = (t / period + ph * 7) - slot;
+    if (local > 0.55) continue;
+    const q = (hash3(g, slot, isl.spec.seed) * n | 0) * 2, x = wp[q], y = wp[q + 1];
+    const len = 1 + (hash3(slot, g, 5) * 3 | 0) + (local > 0.15 && local < 0.4 ? 1 : 0);
+    for (let k = 0; k < len; k++) {
+      const xx = x + k; if (xx >= sp.w) break;
+      const p = y * sp.w + xx; if (!sp.cov[p] || sp.key[p] < 0) continue;
+      bctx.fillStyle = sp.ink[p] ? PAPER : INK;
+      bctx.fillRect(bx + xx, by + y, 1, 1);
+    }
+  }
+}
+
+function render(t) {
+  const s = cam.scale;
+  const bw = Math.ceil(devW / s) + 2, bh = Math.ceil(devH / s) + 2;
+  if (buf.width < bw || buf.height < bh) { buf.width = Math.max(bw, buf.width); buf.height = Math.max(bh, buf.height); }
+  const left = cam.x - devW / (2 * s), top = cam.y - devH / (2 * s);
+  const fx = Math.floor(left), fy = Math.floor(top);
+  bctx.imageSmoothingEnabled = false;
+  bctx.fillStyle = PAPER; bctx.fillRect(0, 0, bw, bh);
+  const list = [];
+  for (const isl of world.islands.values()) {
+    if (!isl.sp) continue;
+    const o = renderOffset(isl, t);
+    const rx = Math.round(isl.x + o.x) - isl.sp.ax - fx, ry = Math.round(isl.y + o.y) - isl.sp.ay - fy;
+    if (rx > bw || ry > bh || rx + isl.sp.w < 0 || ry + isl.sp.h < 0) continue;
+    list.push([isl, rx, ry]);
+  }
+  list.sort((a, b) => a[0].y - b[0].y);
+  for (const [isl, rx, ry] of list) {
+    const sp = isl.sp;
+    if (isl.fade < 1) {
+      const lvl = Math.round(clamp(isl.fade, 0, 1) * 64);
+      if (lvl <= 0) continue;
+      if (tmp.width < sp.w || tmp.height < sp.h) { tmp.width = Math.max(tmp.width, sp.w); tmp.height = Math.max(tmp.height, sp.h); }
+      tctx.globalCompositeOperation = 'source-over'; tctx.clearRect(0, 0, sp.w, sp.h);
+      tctx.drawImage(sp.canvas, 0, 0);
+      tctx.globalCompositeOperation = 'destination-in';
+      tctx.fillStyle = fadePattern(lvl); tctx.fillRect(0, 0, sp.w, sp.h);
+      tctx.globalCompositeOperation = 'source-over';
+      bctx.drawImage(tmp, 0, 0, sp.w, sp.h, rx, ry, sp.w, sp.h);
+    } else bctx.drawImage(sp.canvas, rx, ry);
+    if (isl.fade >= 1) drawWater(isl, rx, ry, t);
+    drawCharacter(isl, rx, ry);
+  }
+  bctx.fillStyle = INK;
+  for (let k = 0; k < P.n; k++) {
+    if (P.life[k] / P.max[k] < P.thr[k] * 0.9) continue;
+    const x = Math.floor(P.x[k]) - fx, y = Math.floor(P.y[k]) - fy;
+    if (x < 0 || y < 0 || x >= bw || y >= bh) continue;
+    bctx.fillRect(x, y, 1, 1);
+  }
+  ctx.imageSmoothingEnabled = false;
+  ctx.fillStyle = PAPER; ctx.fillRect(0, 0, devW, devH);
+  const ox = -Math.round((left - fx) * s), oy = -Math.round((top - fy) * s);
+  ctx.drawImage(buf, 0, 0, bw, bh, ox, oy, bw * s, bh * s);
+}
+
+let last = performance.now(), chunkTick = 0;
+function frame(now) {
+  const dt = Math.min(0.05, (now - last) / 1000); last = now;
+  const t = now / 1000; lastNow = t;
+  updateCamera(dt, now);
+  if (++chunkTick % 8 === 0) updateChunks();
+  processQueue(7);
+  updateIslands(dt);
+  for (const isl of world.islands.values()) if (isl.drag || isl.active) trail(isl, dt);
+  updateParticles(dt);
+  render(t);
+  requestAnimationFrame(frame);
+}
+
+function start() {
+  resize();
+  cam.scale = cam.target = defaultScale();
+  updateChunks();
+  // generate the opening composition up front, then dissolve it in
+  while (world.queue.length || job) processQueue(1e9);
+  const v = viewRect();
+  for (const isl of world.islands.values()) {
+    isl.fade = 0;
+    isl.fadeDelay = 0.15 + Math.hypot(isl.x - cam.x, isl.y - cam.y) / 900;
+  }
+  requestAnimationFrame((n) => { last = n; frame(n); });
+}
+addEventListener('resize', () => { const keep = cam.scale / dpr; resize(); cam.scale = cam.target = clamp(Math.round(keep * dpr), zMin, zMax); });
+start();
+})();
+</script>
+
+</body></html>
