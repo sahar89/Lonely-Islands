@@ -65,7 +65,7 @@ Excerpts were chosen for ordinary, specific moments rather than declared feeling
 - **Sentences** run as one line, or two for long ones. **Passages** form ribbons of up to four lines.
 - **Around the islands.** Each island parts the water: lines passing near it bend smoothly over or under it and follow it as it's dragged, without ever crossing each other. Writing that runs straight into an island slips beneath it and comes out on the other side. Letters fade out near an island's edge and are never drawn on or against an island or its inhabitant.
 - **Nothing pops in.** New pieces enter and leave only well outside the view. The whole water fades in once, with the islands, when the page opens.
-- **Type.** IBM Plex Mono 400 at 12px (at the default zoom), `rgba(34, 0, 255, 0.5)` on `#FFFFFF`.
+- **Type.** IBM Plex Mono 400 at 12px (at the default zoom), `#D9D9D9` on `#FFFFFF`.
 
 ## Deploy
 Every push to `main` deploys to GitHub Pages (**Settings → Pages → Source: GitHub Actions**).
