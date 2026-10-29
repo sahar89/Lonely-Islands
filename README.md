@@ -9,4 +9,4 @@ An interactive, generative pixel-art world of floating islands about friendship,
 
 
 ## The writing
-The collection holds 29 words, 54 sentences and 79 passages from 29 books first published before 1929, all in the public domain in the United States. Most of it is in English: Willa Cather, James Joyce, Edith Wharton, Virginia Woolf, Katherine Mansfield, Anton Chekhov (tr. Constance Garnett), Joseph Conrad, Jane Austen, Charlotte Brontë, Henry David Thoreau, John Keats (letters), Walt Whitman, Emily Dickinson and Rabindranath Tagore.
+The collection holds 29 words, 61 sentences and 84 passages, all in the public domain. Most of it is in English, from 29 books first published before 1929: Willa Cather, James Joyce, Edith Wharton, Virginia Woolf, Katherine Mansfield, Anton Chekhov (tr. Constance Garnett), Joseph Conrad, Jane Austen, Charlotte Brontë, Henry David Thoreau, John Keats (letters), Walt Whitman, Emily Dickinson and Rabindranath Tagore. About a third is in its original French, German, Spanish, Italian, Galician and Persian. The Persian comes from [Ganjoor](https://ganjoor.net), classical poets only: Rudaki, Rumi, Saadi, Hafez and Baba Taher.

@@ -3,7 +3,7 @@
 <meta name="claude:viewport-fit-sides" content="cover">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400&display=swap">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400&family=IBM+Plex+Sans+Arabic:wght@400&display=swap">
 <style>
   /* Single-world artwork: paper white + electric blue ink, no theme switching by design. */
   :root { --paper: #FFFFFF; --ink: #2200FF; color-scheme: light; }
@@ -1807,6 +1807,9 @@ function render(t) {
    ===================================================================== */
 const TYPE_COLOR = '#D9D9D9';
 const TYPE_FAMILY = '"IBM Plex Mono", ui-monospace, Menlo, Consolas, monospace';
+const TYPE_FAMILY_RTL = '"IBM Plex Sans Arabic", "IBM Plex Mono", sans-serif';   // Persian: letters join, so the same family's Arabic-script design
+const RTL_SCALE = 1.15;               // Arabic-script letters look smaller than Latin at the same size
+const RTL_RE = /[\u0590-\u08FF\uFB1D-\uFEFF]/;
 const TYPE_PX = 12;                   // CSS px at the default zoom
 const CONTENT_URL = 'content.json';
 const CONTENT_CACHE_KEY = 'space-between-us:content:v2';
@@ -1837,7 +1840,7 @@ function setCollection(doc) {
     if (!e || typeof e.content !== 'string' || !e.content.trim() || !pools[e.type]) continue;
     if (e.status !== 'approved' || !PERMITTED.has(e.permission_status)) continue;
     const id = String(e.id || e.content);
-    const p = prev.get(id) || { id, text: e.content.trim(), type: e.type, lang: e.language, theme: e.theme, phase: hash3(hashStr(id), 5, 77), lastShown: 0 };
+    const p = prev.get(id) || { id, text: e.content.trim(), type: e.type, lang: e.language, theme: e.theme, rtl: RTL_RE.test(e.content), phase: hash3(hashStr(id), 5, 77), lastShown: 0 };
     pools[e.type].push(p);
   }
   lex.word = pools.word; lex.sentence = pools.sentence; lex.passage = pools.passage;
@@ -2003,8 +2006,24 @@ function layoutFor(p) {
   const lines = p.type === 'passage' ? wrapLines(p.text, Math.max(44, Math.ceil(len / MAX_LINES) + 4))
     : p.type === 'sentence' ? wrapLines(p.text, len <= 90 ? 999 : Math.ceil(len / 2) + 4)
     : [p.text];
+  if (p.rtl) {
+    // right-to-left writing is typeset a whole line at a time (its letters join), and
+    // lines sit flush with the front of the piece, where reading starts
+    // verse keeps one couplet (two half-lines) to a line
+    const parts = p.text.split(' / ');
+    const rl = parts.length > 2 ? parts.reduce((o, h, i) => (i % 2 ? (o[o.length - 1] += ' / ' + h) : o.push(h), o), [])
+      : p.type === 'passage' ? wrapLines(p.text, Math.max(40, Math.ceil(len / 3) + 4)) : lines;
+    const ws = rl.map((l) => rtlWidth(l));
+    const w = Math.max(...ws);
+    return { lines: rl, rtl: true, widths: ws, lineH: fontWorld * 1.9, len: w + 4 };
+  }
   const maxChars = Math.max(...lines.map((l) => l.length));
   return { lines, lineH: fontWorld * 1.6, len: maxChars * lex.adv + 4 };
+}
+function rtlWidth(line) {                                  // world px
+  lex.measure.font = `400 100px ${TYPE_FAMILY_RTL}`;
+  lex.measure.direction = 'rtl';
+  return (lex.measure.measureText(line).width / 100) * fontWorld * RTL_SCALE;
 }
 function chooseType() {
   const r = Math.random();
@@ -2090,8 +2109,18 @@ function lineStrip(pc, j, px) {
   const st = pc.strips || (pc.strips = []);
   let e = st[j];
   if (e && e.px === px) return e;
-  const line = pc.lines[j], A = (lex.adv * px) / fontWorld, h = Math.ceil(px * 1.4) + 4;
+  const line = pc.lines[j], A = (lex.adv * px) / fontWorld;
   const canvas = (e && e.canvas) || document.createElement('canvas');
+  if (pc.rtl) {
+    const fpx = px * RTL_SCALE, h = Math.ceil(fpx * 1.9) + 4, W = Math.ceil((pc.widths[j] * px) / fontWorld) + 2;
+    canvas.width = W; canvas.height = h;
+    const g = canvas.getContext('2d');
+    g.clearRect(0, 0, W, h);
+    g.font = `400 ${fpx}px ${TYPE_FAMILY_RTL}`; g.fillStyle = TYPE_COLOR; g.direction = 'rtl'; g.textAlign = 'right'; g.textBaseline = 'middle';
+    g.fillText(line, W - 1, h / 2);
+    return (st[j] = { px, A, h, canvas, cells: Math.ceil(W / A) });
+  }
+  const h = Math.ceil(px * 1.4) + 4;
   canvas.width = Math.ceil(line.length * A) + 2; canvas.height = h;
   const g = canvas.getContext('2d');
   g.clearRect(0, 0, canvas.width, h);
@@ -2128,27 +2157,31 @@ function drawWords() {
       if (tail > V.x1 + 20 || pc.head < V.x0 - 20) continue;
       const m = pc.lines.length;
       // letters sit at fixed steps along the lane, so only the visible ones need placing
-      const c0 = Math.max(0, Math.floor((V.x0 - 8 - tail) / adv)), c1 = Math.ceil((V.x1 + 8 - tail) / adv);
       for (let j = 0; j < m; j++) {
         const line = pc.lines[j], off = (j - (m - 1) / 2) * pc.lineH;
         const strip = lineStrip(pc, j, px);
+        // a right-to-left line is drawn as slices of its typeset strip, flush with the front
+        const rtl = !!pc.rtl, n = rtl ? strip.cells : line.length;
+        const lx = rtl ? tail + pc.len - 2 - strip.cells * adv : tail;
+        const blank = (c) => !rtl && line[c] === ' ';
+        const c0 = Math.max(0, Math.floor((V.x0 - 8 - lx) / adv)), c1 = Math.ceil((V.x1 + 8 - lx) / adv);
         // in runs of a few letters: a run in open water is stamped whole from the
         // line's strip; a run near an island goes letter by letter
-        for (let r0 = c0 - (c0 % RUN); r0 < line.length && r0 <= c1; r0 += RUN) {
-          const r1 = Math.min(line.length, r0 + RUN);
+        for (let r0 = c0 - (c0 % RUN); r0 < n && r0 <= c1; r0 += RUN) {
+          const r1 = Math.min(n, r0 + RUN);
           let open = true, any = false;
           for (let c = r0; c < r1; c++) {
-            const gx = tail + (c + 0.5) * adv, u = (gx - X0) / LS, i0 = Math.floor(u);
+            const gx = lx + (c + 0.5) * adv, u = (gx - X0) / LS, i0 = Math.floor(u);
             if (i0 < 0 || i0 >= NS - 1) { cls[c - r0] = -2; open = false; continue; }
             const gy = lineAt(gx, off); gys[c - r0] = gy;
             if (gy < V.y0 - 12 || gy > V.y1 + 12) { cls[c - r0] = -2; open = false; continue; }
-            const cl = line[c] === ' ' ? 1e9 : clearance(gx, gy);
+            const cl = blank(c) ? 1e9 : clearance(gx, gy);
             cls[c - r0] = cl; any = true;
             if (cl < near + soft) open = false;
           }
           if (!any) continue;
           if (open) {
-            const xa = tail + r0 * adv, xb = tail + r1 * adv;
+            const xa = lx + r0 * adv, xb = lx + r1 * adv;
             const ya = lineAt(xa, off), yb = lineAt(xb, off);
             const X = (xa - left) * s, Y = (ya - top) * s, dx = (xb - xa) * s, dy = (yb - ya) * s, len = Math.hypot(dx, dy);
             const ux = dx / len, uy = dy / len, sx = len / ((r1 - r0) * strip.A);
@@ -2158,14 +2191,15 @@ function drawWords() {
             continue;
           }
           for (let c = r0; c < r1; c++) {
-            const cl = cls[c - r0], ch = line[c];
-            if (ch === ' ' || cl < near) continue;                    // never on or against an island
-            const gx = tail + (c + 0.5) * adv, gy = gys[c - r0], sl = (lineAt(gx + 1.5, off) - lineAt(gx - 1.5, off)) / 3;
-            const e = glyph(ch, px); if (!e) continue;
+            const cl = cls[c - r0];
+            if (blank(c) || cl < near) continue;                      // never on or against an island
+            const gx = lx + (c + 0.5) * adv, gy = gys[c - r0], sl = (lineAt(gx + 1.5, off) - lineAt(gx - 1.5, off)) / 3;
+            const e = rtl ? null : glyph(line[c], px); if (!rtl && !e) continue;
             ctx.globalAlpha = base * (cl < near + soft ? (cl - near) / soft : 1);
             const nrm = Math.sqrt(1 + sl * sl), tx = gs / nrm, ty = gs * sl / nrm;
             ctx.setTransform(tx, ty, -ty, tx, (gx - left) * s, (gy - top) * s);
-            ctx.drawImage(atlas, e.x, e.y, cw, chh, -cw / 2, -chh / 2, cw, chh);
+            if (rtl) ctx.drawImage(strip.canvas, c * strip.A, 0, strip.A, strip.h, -strip.A / 2, -strip.h / 2, strip.A, strip.h);
+            else ctx.drawImage(atlas, e.x, e.y, cw, chh, -cw / 2, -chh / 2, cw, chh);
           }
         }
       }
@@ -2182,7 +2216,10 @@ function initLanguage() {
     lex.measure.font = `400 ${TYPE_PX}px ${TYPE_FAMILY}`;
     lex.adv = lex.measure.measureText('M').width * fontWorld / TYPE_PX;   // monospace advance in world px
   };
-  if (document.fonts && document.fonts.load) document.fonts.load(`400 ${TYPE_PX}px "IBM Plex Mono"`).then(ready, ready);
+  if (document.fonts && document.fonts.load) Promise.all([
+    document.fonts.load(`400 ${TYPE_PX}px "IBM Plex Mono"`),
+    document.fonts.load(`400 ${TYPE_PX}px "IBM Plex Sans Arabic"`, 'گل'),
+  ]).then(ready, ready);
   else ready();
   lex.measure.font = `400 ${TYPE_PX}px ${TYPE_FAMILY}`;
   loadCollection();

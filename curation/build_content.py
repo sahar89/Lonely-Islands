@@ -17,6 +17,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 CACHE = os.path.join(HERE, '.cache')
 RAW = 'https://raw.githubusercontent.com/GITenberg/{repo}/master/{file}'
+GANJOOR = 'https://raw.githubusercontent.com/ganjoor/ganjoor-data/{sha}/poets/{poem}.json'
 
 
 def fetch(book, repo, file=None):
@@ -40,6 +41,30 @@ def fetch(book, repo, file=None):
     except UnicodeDecodeError:
         text = raw.decode('latin-1')   # older Gutenberg files ("-8.txt") are ISO-8859-1
     return text.replace('\r\n', '\n')
+
+
+def ganjoor_poem(sha, poem):
+    """A poem from Ganjoor's public data export, pinned to one commit."""
+    os.makedirs(os.path.join(CACHE, 'ganjoor'), exist_ok=True)
+    path = os.path.join(CACHE, 'ganjoor', f"{sha[:12]}__{poem.replace('/', '__')}.json")
+    if not os.path.exists(path):
+        try:
+            with urllib.request.urlopen(GANJOOR.format(sha=sha, poem=poem), timeout=60) as r:
+                data = r.read()
+        except Exception:
+            sys.exit(f'could not download Ganjoor poem {poem}')
+        with open(path, 'wb') as f:
+            f.write(data)
+    return json.load(open(path, encoding='utf-8'))
+
+
+def ganjoor_excerpt(doc, first, last):
+    """Couplets (or prose paragraphs) first..last, in order. Hemistichs and couplets are
+    separated by ' / ', exactly as verse is everywhere else; the words are untouched."""
+    vs = sorted((v for v in doc.get('Verses') or [] if first <= v['CoupletIndex'] <= last), key=lambda v: v['VOrder'])
+    if not vs or {v['CoupletIndex'] for v in vs} != set(range(first, last + 1)):
+        raise ValueError(f"couplets {first}-{last} not found in {doc.get('FullUrl')}")
+    return ' / '.join(v['Text'].strip() for v in vs)
 
 
 def paragraphs(text):
@@ -122,6 +147,36 @@ def main():
                 add(kind, p, excerpt(books[p['book']], p), f"paragraph {p['para']}")
             except Exception as e:
                 errors.append(f"{kind} {p['book']}:{p['para']}: {e}")
+    gmeta = json.load(open(os.path.join(HERE, 'sources.json'))).get('_ganjoor', {})
+    for p in picks.get('ganjoor', []):
+        poet = gmeta['poets'][p['poem'].split('/')[0]]
+        try:
+            doc = ganjoor_poem(gmeta['sha'], p['poem'])
+            first, last = p['couplets']
+            content = ganjoor_excerpt(doc, first, last)
+        except Exception as e:
+            errors.append(f"ganjoor {p['poem']}: {e}"); continue
+        eid = hashlib.sha1(f"ganjoor:{p['poem']}|{content}".encode()).hexdigest()[:10]
+        prose = any(v.get('Position') == 'Paragraph' for v in doc['Verses'] if first <= v['CoupletIndex'] <= last)
+        unit = 'paragraph' if prose else 'couplet'
+        locator = f"{unit} {first + 1}" if first == last else f"{unit}s {first + 1}-{last + 1}"
+        entries.append({
+            'id': eid,
+            'content': content,
+            'type': p['type'],
+            'language': 'fa',
+            'theme': p['theme'],
+            'source': {
+                'title': doc['FullTitle'], 'author': poet['author'], 'died': poet['died'], 'form': 'prose' if prose else 'poem',
+                'edition': f"Ganjoor (ganjoor-data@{gmeta['sha'][:7]})", 'url': 'https://ganjoor.net' + doc['FullUrl'],
+                'locator': locator, 'license': 'Public domain (classical Persian, written centuries ago); transcription from Ganjoor',
+            },
+            'collected_at': prev.get(eid, {}).get('collected_at', today),
+            'permission_status': 'public-domain',
+            'origin': 'curated',
+            'status': 'approved',
+        })
+
     for p in picks['words']:
         paras = books[p['book']]
         hit = next((i for i, ls in enumerate(paras)
