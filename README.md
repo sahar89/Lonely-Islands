@@ -1,10 +1,10 @@
 # The Space Between Us
 
-An interactive, generative pixel-art world of floating islands about friendship, separation, migration, belonging, and how hard it is to stay close to one another. Each island is drawn in white and electric blue `#2200FF` with ordered dithering, and each has a single inhabitant going about their day. Between the islands, real human writing drifts through the empty space like slow water: single words, whole sentences, and short passages from public-domain letters, diaries, fiction and poetry. The currents bend around the islands and never touch them.
+An interactive, generative pixel-art world of floating islands about friendship, separation, migration, belonging, and how hard it is to stay close to one another. Each island is drawn in white and electric blue `#2200FF` with ordered dithering, and each has a single inhabitant going about their day. Between the islands, real human writing drifts through the empty space like slow water: mostly whole sentences and passages (a single word only rarely) from public-domain letters, diaries, fiction and poetry. The islands float above the water: the writing slips beneath them and never touches them.
 
 ## Interact
 - **Drag empty space** to explore the infinite canvas.
-- **Drag an island** to move it. Islands never overlap. The current parts around a moving island and closes again behind it.
+- **Drag an island** to move it. Islands never overlap. The writing keeps flowing beneath it.
 - **Scroll or pinch** to zoom around the cursor.
 
 ## Repository
@@ -18,7 +18,7 @@ An interactive, generative pixel-art world of floating islands about friendship,
 | `.github/workflows/pages.yml` | Publishes `index.html` and `content.json` to GitHub Pages on every push to `main`. |
 
 ## The writing
-The collection holds 30 words, 46 sentences and 18 passages from 19 books first published before 1929, all in the public domain in the United States. The authors are Willa Cather, James Joyce, Edith Wharton, Virginia Woolf, Katherine Mansfield, Anton Chekhov (tr. Constance Garnett), Joseph Conrad, Jane Austen, Charlotte Brontë, Henry David Thoreau, John Keats (letters), Walt Whitman, Emily Dickinson and Rabindranath Tagore.
+The collection holds 30 words, 46 sentences and 59 passages from 19 books first published before 1929, all in the public domain in the United States. The authors are Willa Cather, James Joyce, Edith Wharton, Virginia Woolf, Katherine Mansfield, Anton Chekhov (tr. Constance Garnett), Joseph Conrad, Jane Austen, Charlotte Brontë, Henry David Thoreau, John Keats (letters), Walt Whitman, Emily Dickinson and Rabindranath Tagore.
 
 Excerpts were chosen for ordinary, specific moments rather than declared feelings: a father who no longer plays his violin in the new country, a grandmother who thinks she is home in Norway, a letter that can't be written, a friend who lives in the same city and is never seen.
 
@@ -60,12 +60,11 @@ Excerpts were chosen for ordinary, specific moments rather than declared feeling
 
 ## How the artwork uses it
 - **Rotation.** The collection turns over slowly. Each piece rises and falls on its own tide, with a cycle of about 23 minutes that shifts from day to day, and a piece that has just flowed past rests for about nine minutes. Frequency plays no part. The page reloads `content.json` every three hours and falls back to the last copy the browser saw.
-- **Words** drift as small, separate elements.
-- **Sentences** run as single curved lines (two or three for long ones) along a trail the current draws.
-- **Passages** form ribbons of four to seven lines.
-- **Bending around islands.** Text follows its own trail in reading order, so it bends around islands without reordering. Near a moving island the trail steps to one side and wraps around it, then relaxes back into the current. A stream that turns to read backwards fades and flips.
-- **Spacing.** Streams keep apart from each other and from single words. Text that stalls or keeps crowding other text dissolves.
-- **Never on an island.** Each letter's clearance from every island is checked before it is drawn, against where the island is now and where it is about to be.
+- **Mix.** About half of what flows is passages and half sentences. Single words are rare. A piece already flowing isn't picked again until the collection runs out, and copies of the same piece are kept far apart.
+- **Lanes.** The water is a stack of parallel lanes, all flowing left to right and undulating together, so lanes never cross, fold back or circle. Each lane carries pieces end to end in reading order, so text never overlaps.
+- **Sentences** run as one line, or two for long ones. **Passages** form ribbons of up to four lines.
+- **Beneath the islands.** Where a lane passes under an island, its writing slips beneath it and comes out on the other side. Letters fade out near an island's edge and are never drawn on or against an island or its inhabitant.
+- **Nothing pops in.** New pieces enter and leave only well outside the view. The whole water fades in once, with the islands, when the page opens.
 - **Type.** IBM Plex Mono 400 at 12px (at the default zoom), `rgba(34, 0, 255, 0.5)` on `#FFFFFF`.
 
 ## Deploy
