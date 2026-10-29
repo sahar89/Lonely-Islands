@@ -1,10 +1,10 @@
 # The Space Between Us
 
-An interactive, generative pixel-art world of floating islands about friendship, separation, migration, belonging, and how hard it is to stay close to one another. Each island is drawn in white and electric blue `#2200FF` with ordered dithering, and each has a single inhabitant going about their day. Between the islands, real human writing drifts through the empty space like slow water: mostly whole sentences and passages (a single word only rarely) from public-domain letters, diaries, fiction and poetry. The islands float above the water: the writing slips beneath them and never touches them.
+An interactive, generative pixel-art world of floating islands about friendship, separation, migration, belonging, and how hard it is to stay close to one another. Each island is drawn in white and electric blue `#2200FF` with ordered dithering, and each has a single inhabitant going about their day. Between the islands, real human writing drifts through the empty space like slow water: mostly whole sentences and passages (a single word only rarely) from public-domain letters, diaries, fiction and poetry. The writing parts around the islands, follows them when they're dragged, and never touches them.
 
 ## Interact
 - **Drag empty space** to explore the infinite canvas.
-- **Drag an island** to move it. Islands never overlap. The writing keeps flowing beneath it.
+- **Drag an island** to move it. Islands never overlap. The writing parts around it as it moves and closes again behind it.
 - **Scroll or pinch** to zoom around the cursor.
 
 ## Repository
@@ -63,7 +63,7 @@ Excerpts were chosen for ordinary, specific moments rather than declared feeling
 - **Mix.** About half of what flows is passages and half sentences. Single words are rare. A piece already flowing isn't picked again until the collection runs out, and copies of the same piece are kept far apart.
 - **Lanes.** The water is a stack of parallel lanes, all flowing left to right and undulating together, so lanes never cross, fold back or circle. Each lane carries pieces end to end in reading order, so text never overlaps.
 - **Sentences** run as one line, or two for long ones. **Passages** form ribbons of up to four lines.
-- **Beneath the islands.** Where a lane passes under an island, its writing slips beneath it and comes out on the other side. Letters fade out near an island's edge and are never drawn on or against an island or its inhabitant.
+- **Around the islands.** Each island parts the water: lines passing near it bend smoothly over or under it and follow it as it's dragged, without ever crossing each other. Writing that runs straight into an island slips beneath it and comes out on the other side. Letters fade out near an island's edge and are never drawn on or against an island or its inhabitant.
 - **Nothing pops in.** New pieces enter and leave only well outside the view. The whole water fades in once, with the islands, when the page opens.
 - **Type.** IBM Plex Mono 400 at 12px (at the default zoom), `rgba(34, 0, 255, 0.5)` on `#FFFFFF`.
 

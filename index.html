@@ -1798,8 +1798,9 @@ function render(t) {
    diaries, fiction and poetry. The water is a stack of parallel lanes
    flowing left to right, each a gently undulating line that can never
    cross another, fold back or circle. Pieces ride their lane end to end
-   in reading order and never overlap. The islands float above the water:
-   where a lane passes beneath one, its writing slips under the island,
+   in reading order and never overlap. Each island parts the water: lines
+   passing near it bend smoothly over or under it, and follow it when it is
+   dragged. Writing that runs straight into an island slips beneath it,
    always keeping a clear margin from the island's edge, and comes out on
    the other side. New text only enters far outside the view, so nothing
    appears or disappears on screen.
@@ -1852,14 +1853,15 @@ function tideWeight(p, now) {
   return (0.06 + tide * tide) * rest;
 }
 function pickFrom(type, near) {
-  const pool = lex[type];
-  if (!pool.length) return null;
   const now = Date.now();
   // prefer pieces not already flowing; repeat only when the water holds more than
   // the collection, and then never close to another copy of the same piece
   const far = (p) => { const set = afloat.get(p.id); if (!set || !near) return true;
-    for (const o of set) if (Math.abs(o.k - near.k) * LANE < 900 && Math.abs(o.head - near.x) < 2200) return false; return true; };
-  for (const pass of [0, 1, 2]) {
+    for (const o of set) if (Math.abs(o.k - near.k) * LANE < 700 && Math.abs(o.head - near.x) < 1800) return false; return true; };
+  const order = [type, ...['sentence', 'passage'].filter((t) => t !== type)];
+  for (const pass of [0, 1, 2]) for (const ty of pass === 2 ? [type] : order) {
+    const pool = lex[ty];
+    if (!pool.length) continue;
     let total = 0;
     const w = pool.map((p) => { const v = (pass === 0 && onWater.get(p.id)) || (pass === 1 && !far(p)) ? 0 : tideWeight(p, now); total += v; return v; });
     if (!(total > 0)) continue;
@@ -1904,7 +1906,7 @@ function buildIslandGrid(t) {
     if (!isl.sp) continue;
     const o = renderOffset(isl, t);
     isl._wx = Math.round(isl.x + o.x); isl._wy = Math.round(isl.y + o.y);
-    const r = isl.sp.br + 60;
+    const r = isl.sp.br + 220;                        // reach of the island's pull on the water
     for (let gy = Math.floor((isl._wy - r) / IG); gy <= Math.floor((isl._wy + r) / IG); gy++)
       for (let gx = Math.floor((isl._wx - r) / IG); gx <= Math.floor((isl._wx + r) / IG); gx++) {
         const k = gx + ',' + gy;
@@ -1912,6 +1914,31 @@ function buildIslandGrid(t) {
         a.push(isl);
       }
   }
+}
+// The current parts around each island: water near an island is pushed
+// smoothly up over it or down under it (more the closer it passes, nothing at
+// a distance), and follows the island wherever it is dragged. The push never
+// reverses the order of the water from top to bottom, so lines of text still
+// never cross; writing that runs straight into an island slips beneath it.
+const PART = 30;                       // world px: the most an island pushes the water aside
+function parting(x, y) {
+  const list = islandGrid.get(Math.floor(x / IG) + ',' + Math.floor(y / IG));
+  if (!list) return 0;
+  let d = 0;
+  for (const isl of list) {
+    const sp = isl.sp, hw = sp.w / 2, hh = sp.h / 2;
+    const dx = Math.abs(x - (isl._wx - sp.ax + hw));
+    const reachX = hw + 140;
+    if (dx >= reachX) continue;
+    const cy = isl._wy - sp.ay + hh, u = y - cy, R = hh + 150;
+    if (Math.abs(u) >= R) continue;
+    const A = Math.min(PART, hh * 0.5);
+    const tx = Math.max(0, dx - hw * 0.5) / (reachX - hw * 0.5), ty = Math.abs(u) / R;
+    const wx = 1 - tx * tx * (3 - 2 * tx), wy = 1 - ty * ty * (3 - 2 * ty);
+    const side = clamp(u / 30, -1, 1);   // above the middle: over the top; below: underneath
+    d += A * side * wx * wy;
+  }
+  return d;
 }
 // Distance from each pixel around an island to its silhouette (0 inside), up
 // to DF_PAD pixels out: built once per island shape.
@@ -2085,9 +2112,10 @@ function drawWords() {
   const px = Math.round(fw * s), gs = (fw * s) / px;        // atlas size, and the small scale to the exact size
   glyph(' ', px);
   const atlas = glyphs.canvas, cw = glyphs.cw, chh = glyphs.chh;
-  const RUN = 12, cls = new Float32Array(RUN);
+  const RUN = 8, cls = new Float32Array(RUN), gys = new Float32Array(RUN);
   let laneK = 0;
   const laneAtDraw = (x) => { const u = (x - X0) / LS, i0 = Math.floor(u); return i0 >= 0 && i0 < NS - 1 ? ly[i0] + (ly[i0 + 1] - ly[i0]) * (u - i0) : laneY(laneK, x, t); };
+  const lineAt = (x, off) => { const y = laneAtDraw(x) + off; return y + parting(x, y); };   // where a line of text runs
   ctx.save();
   ctx.imageSmoothingEnabled = true;
   for (const lane of lanes.values()) {
@@ -2112,7 +2140,7 @@ function drawWords() {
           for (let c = r0; c < r1; c++) {
             const gx = tail + (c + 0.5) * adv, u = (gx - X0) / LS, i0 = Math.floor(u);
             if (i0 < 0 || i0 >= NS - 1) { cls[c - r0] = -2; open = false; continue; }
-            const gy = ly[i0] + (ly[i0 + 1] - ly[i0]) * (u - i0) + off;
+            const gy = lineAt(gx, off); gys[c - r0] = gy;
             if (gy < V.y0 - 12 || gy > V.y1 + 12) { cls[c - r0] = -2; open = false; continue; }
             const cl = line[c] === ' ' ? 1e9 : clearance(gx, gy);
             cls[c - r0] = cl; any = true;
@@ -2121,7 +2149,7 @@ function drawWords() {
           if (!any) continue;
           if (open) {
             const xa = tail + r0 * adv, xb = tail + r1 * adv;
-            const ya = laneAtDraw(xa) + off, yb = laneAtDraw(xb) + off;
+            const ya = lineAt(xa, off), yb = lineAt(xb, off);
             const X = (xa - left) * s, Y = (ya - top) * s, dx = (xb - xa) * s, dy = (yb - ya) * s, len = Math.hypot(dx, dy);
             const ux = dx / len, uy = dy / len, sx = len / ((r1 - r0) * strip.A);
             ctx.globalAlpha = base;
@@ -2132,8 +2160,7 @@ function drawWords() {
           for (let c = r0; c < r1; c++) {
             const cl = cls[c - r0], ch = line[c];
             if (ch === ' ' || cl < near) continue;                    // never on or against an island
-            const gx = tail + (c + 0.5) * adv, u = (gx - X0) / LS, i0 = Math.floor(u);
-            const a = ly[i0], b = ly[i0 + 1], sl = (b - a) / LS, gy = a + (b - a) * (u - i0) + off;
+            const gx = tail + (c + 0.5) * adv, gy = gys[c - r0], sl = (lineAt(gx + 1.5, off) - lineAt(gx - 1.5, off)) / 3;
             const e = glyph(ch, px); if (!e) continue;
             ctx.globalAlpha = base * (cl < near + soft ? (cl - near) / soft : 1);
             const nrm = Math.sqrt(1 + sl * sl), tx = gs / nrm, ty = gs * sl / nrm;
