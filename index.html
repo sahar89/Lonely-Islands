@@ -1,5 +1,5 @@
 <!doctype html><html><head><meta charset=utf8><meta name=viewport content="width=device-width,initial-scale=1,viewport-fit=cover"><style>:root{color-scheme:light;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}html{scroll-padding-top:env(safe-area-inset-top,0px)}body{margin:0;padding:0;font:14px -apple-system,BlinkMacSystemFont,sans-serif;background:#fff;color:#000}img{max-width:100%}[hidden]:not([hidden=until-found i]){display:none!important}</style></head><body>
-<title>Floating Islands</title>
+<title>The Space Between Us</title>
 <meta name="claude:viewport-fit-sides" content="cover">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -1793,91 +1793,100 @@ function render(t) {
 
 /* =====================================================================
    13. LANGUAGE CURRENTS
-   Words collected from public conversations drift through the empty
-   space as slow water. Everything lives in world coordinates: a
-   divergence-free flow field carries each word along stream lines, and
-   the field bends around islands, which words never touch.
+   Writing drifts through the empty space as slow water: single words,
+   whole sentences and short passages from public-domain letters, diaries,
+   fiction and poetry. Everything lives in world coordinates. A
+   divergence-free flow field carries the text along stream lines and bends
+   around the islands, which the text never touches.
    ===================================================================== */
 const TYPE_COLOR = 'rgba(34, 0, 255, 0.5)';
 const TYPE_FAMILY = '"IBM Plex Mono", ui-monospace, Menlo, Consolas, monospace';
 const TYPE_PX = 12;                   // CSS px at the default zoom
-const WORDS_URL = 'words.json';
-const WORDS_CACHE_KEY = 'floating-islands:words:v1';
+const CONTENT_URL = 'content.json';
+const CONTENT_CACHE_KEY = 'space-between-us:content:v2';
 const W_BUF = 9;                      // world px always kept clear around an island
 const W_NEAR = 46;                    // distance at which the current starts to bend
 const FLOW_S = 560;                   // size of the large currents (world px)
 const FLOW_K = 15000;                 // stream-function strength -> roughly 9 px/s
 const LEVEL = 0.075;                  // spacing between possible stream lines (noise units)
-const BAND = 0.016;                   // half-width of a stream line where words are born
-const DENSITY = 1 / 7000;             // target words per world px² inside the active area
-const MAX_WORDS = 380;
-const DAY = 864e5;
+const BAND = 0.016;                   // half-width of a stream line where text is born
+const DENSITY = 1 / 52000;            // single words per world px² inside the active area
+const MAX_WORDS = 160;
+const SENTENCE_AREA = 110000;         // world px² per sentence stream
+const PASSAGE_AREA = 900000;          // world px² per passage ribbon
+const ROTATION_MIN = 23;              // minutes for the collection to turn over once
+const SHOWN_COOLDOWN = 9 * 60e3;      // a piece rests this long after it has flowed past
+const MIN = 60e3;
 
-const lex = { pool: [], cum: [], total: 0, fontReady: false, measure: null };
+// Pieces that may enter the currents: curated public-domain writing, and (later)
+// visitor writing once it has been moderated and its author has granted permission.
+const PERMITTED = new Set(['public-domain', 'licensed', 'granted']);
+
+const lex = { word: [], sentence: [], passage: [], fontReady: false, measure: null, adv: 3.6 };
 const words = [];
+const streams = [];
 let fontWorld = 6;                    // world px per glyph em, fixed at start
 let wordGrid = new Map();
 let islandGrid = new Map();
 const IG = 320;                       // island grid cell (world px)
 
-/* ---- vocabulary ---------------------------------------------------- */
-function vocabWeight(e, now) {
-  const last = Date.parse(e.lastSeen) || now, first = Date.parse(e.firstSeen) || now;
-  const fresh = Math.exp(-Math.max(0, now - last) / (12 * DAY));          // older words thin out
-  const arrival = clamp((now - first) / (2 * DAY), 0.2, 1);             // new words enter gradually
-  const staying = 1 + 0.4 * clamp((last - first) / (20 * DAY), 0, 1);     // words that keep returning persist
-  const voice = 0.55 + 0.45 * Math.min(1, Math.log1p(e.frequency || 1) / Math.log(30));
-  return fresh * arrival * staying * voice * (e.kind === 'phrase' ? 0.45 : 1);
+/* ---- collection ---------------------------------------------------- */
+function setCollection(doc) {
+  const prev = new Map([...lex.word, ...lex.sentence, ...lex.passage].map((p) => [p.id, p]));
+  const pools = { word: [], sentence: [], passage: [] };
+  for (const e of doc.entries || []) {
+    if (!e || typeof e.content !== 'string' || !e.content.trim() || !pools[e.type]) continue;
+    if (e.status !== 'approved' || !PERMITTED.has(e.permission_status)) continue;
+    const id = String(e.id || e.content);
+    const p = prev.get(id) || { id, text: e.content.trim(), type: e.type, lang: e.language, theme: e.theme, phase: hash3(hashStr(id), 5, 77), lastShown: 0, width: 0 };
+    pools[e.type].push(p);
+  }
+  lex.word = pools.word; lex.sentence = pools.sentence; lex.passage = pools.passage;
 }
-function setVocabulary(doc) {
+function hashStr(s) { let h = 2166136261; for (let i = 0; i < s.length; i++) h = Math.imul(h ^ s.charCodeAt(i), 16777619); return h | 0; }
+// The collection turns slowly: each piece rises and falls on its own tide, so the
+// mix in the currents keeps changing; a piece that has just flowed past rests.
+function tideWeight(p, now) {
+  const day = Math.floor(now / 864e5);
+  const ph = (now / (ROTATION_MIN * MIN) + p.phase + day * 0.37) % 1;
+  const tide = 0.5 + 0.5 * Math.sin(ph * 6.2832);
+  const rest = now - p.lastShown < SHOWN_COOLDOWN ? 0.04 : 1;
+  return (0.06 + tide * tide) * rest;
+}
+function pickFrom(type) {
+  const pool = lex[type];
+  if (!pool.length) return null;
   const now = Date.now();
-  // Collected words and moderated visitor words share one system; only approved entries flow.
-  const list = (doc.entries || []).filter((e) => e && typeof e.text === 'string' && e.text.trim() && e.status === 'approved' && (e.origin === 'bluesky' || e.origin === 'visitor'));
-  const themeN = new Map(), langN = new Map();
-  for (const e of list) { themeN.set(e.theme, (themeN.get(e.theme) || 0) + 1); langN.set(e.lang, (langN.get(e.lang) || 0) + 1); }
-  const prev = new Map(lex.pool.map((p) => [p.key, p]));
-  const pool = [], cum = [];
   let total = 0;
-  for (const e of list) {
-    const key = e.lang + '|' + e.text;
-    const w = vocabWeight(e, now) / Math.sqrt(themeN.get(e.theme)) / Math.pow(langN.get(e.lang), 0.25);
-    if (!(w > 0)) continue;
-    const p = prev.get(key) || { key, text: e.text.trim(), lang: e.lang, width: 0 };
-    total += w; pool.push(p); cum.push(total);
-  }
-  lex.pool = pool; lex.cum = cum; lex.total = total;
-}
-function pickEntry() {
-  if (!lex.total) return null;
-  for (let tries = 0; tries < 5; tries++) {
-    const r = Math.random() * lex.total;
-    let lo = 0, hi = lex.cum.length - 1;
-    while (lo < hi) { const mid = (lo + hi) >> 1; if (lex.cum[mid] < r) lo = mid + 1; else hi = mid; }
-    const p = lex.pool[lo];
-    if (tries < 4 && words.some((w) => w.entry === p && w.life > 0)) continue;
-    return p;
-  }
+  const w = pool.map((p) => { const v = active(p) ? 0 : tideWeight(p, now); total += v; return v; });
+  if (!(total > 0)) return null;
+  let r = Math.random() * total;
+  for (let i = 0; i < pool.length; i++) { r -= w[i]; if (r <= 0) { pool[i].lastShown = now; return pool[i]; } }
   return null;
+}
+function active(p) {
+  if (p.type === 'word') return words.some((w) => w.entry === p);
+  return streams.some((st) => st.entry === p);
 }
 function measureEntry(p) {
   if (!p.width) { lex.measure.font = `400 ${TYPE_PX}px ${TYPE_FAMILY}`; p.width = lex.measure.measureText(p.text).width * fontWorld / TYPE_PX; }
   return p.width;
 }
-async function loadVocabulary() {
-  // The artwork never calls Bluesky. It reads the published words.json and
-  // falls back to the last copy this browser saw; nothing is shown on failure.
+async function loadCollection() {
+  // Reads the published content.json; falls back to the last copy this browser
+  // saw. Nothing is ever shown on failure.
   try {
-    const res = await fetch(WORDS_URL, { cache: 'no-cache' });
+    const res = await fetch(CONTENT_URL, { cache: 'no-cache' });
     if (res.ok) {
       const doc = await res.json();
       if (doc && Array.isArray(doc.entries) && doc.entries.length) {
-        setVocabulary(doc);
-        try { localStorage.setItem(WORDS_CACHE_KEY, JSON.stringify(doc)); } catch (e) {}
+        setCollection(doc);
+        try { localStorage.setItem(CONTENT_CACHE_KEY, JSON.stringify(doc)); } catch (e) {}
         return;
       }
     }
   } catch (e) {}
-  try { const doc = JSON.parse(localStorage.getItem(WORDS_CACHE_KEY) || 'null'); if (doc && Array.isArray(doc.entries)) setVocabulary(doc); } catch (e) {}
+  try { const doc = JSON.parse(localStorage.getItem(CONTENT_CACHE_KEY) || 'null'); if (doc && Array.isArray(doc.entries)) setCollection(doc); } catch (e) {}
 }
 
 /* ---- flow field ---------------------------------------------------- */
@@ -1922,7 +1931,7 @@ function buildIslandGrid(t) {
 // shifted by (sx, sy). Returns the gap and the direction that opens it.
 const fieldTmp = { d: 0, nx: 0, ny: 0 };
 function capsuleGap(w, isl, sx, sy, out) {
-  const ca = Math.cos(w.rot), sa = Math.sin(w.rot), hw = w.hw, hr = fontWorld * 0.42;
+  const ca = Math.cos(w.rot), sa = Math.sin(w.rot), hw = w.hw, hr = w.hr || fontWorld * 0.42;
   const ox = isl._wx + sx, oy = isl._wy + sy, e = isl.sp.edge;
   let best = 1e9, bx = 0, by = 0;
   for (let k = 0; k < e.length; k += 3) {
@@ -1958,7 +1967,7 @@ function nearestGap(w, lookahead, out) {
   const list = islandGrid.get(Math.floor(w.x / IG) + ',' + Math.floor(w.y / IG));
   if (!list) return out;
   for (const isl of list) {
-    const reach = isl.sp.br + w.hw + W_NEAR + 40;
+    const reach = isl.sp.br + w.hw + (w.hr || 0) + W_NEAR + 40;
     const spd = Math.hypot(isl.vx, isl.vy);
     const lead = spd * lookahead;
     if (Math.hypot(w.x - isl._wx, w.y - isl._wy) > reach + lead) continue;
@@ -2009,7 +2018,7 @@ function crowded(x, y, r) {
 }
 const flowTmp = { vx: 0, vy: 0, p: 0, gx: 0, gy: 0 };
 function spawnWords(t) {
-  if (!lex.total || !lex.fontReady) return;
+  if (!lex.word.length || !lex.fontReady) return;
   const a = activeRect(), area = (a.x1 - a.x0) * (a.y1 - a.y0);
   const target = Math.min(MAX_WORDS, Math.round(area * DENSITY));
   let alive = 0; for (const w of words) if (w.life > 0) alive++;
@@ -2026,11 +2035,11 @@ function spawnWords(t) {
     if (Math.abs(p - k * LEVEL) > BAND) continue;
     if (streamStrength(k) < 0.3) continue;
     if (Math.random() > streamDensity(k) * openness(x, y)) continue;
-    const entry = pickEntry(); if (!entry) return;
+    const entry = pickFrom('word'); if (!entry) return;
     const w = { entry, text: entry.text, lang: entry.lang, x, y, vx: 0, vy: 0, rot: 0, hw: measureEntry(entry) / 2, stream: k,
       life: 0, max: 30 + Math.random() * 45, alpha: 0, side: Math.random() < 0.5 ? -1 : 1, still: 0, crowd: 0 };
     flowAt(x, y, t, flowTmp); w.vx = flowTmp.vx; w.vy = flowTmp.vy; w.rot = uprightAngle(Math.atan2(w.vy, w.vx));
-    if (crowded(x, y, w.hw)) continue;
+    if (crowded(x, y, w.hw) || nearText(x, y, w.hw + 10, null)) continue;
     if (nearestGap(w, 0.4, fieldTmp).d < W_BUF + 16) continue;
     words.push(w); alive++;
   }
@@ -2041,11 +2050,11 @@ function uprightAngle(a) {
 }
 const wakeTmp = { vx: 0, vy: 0 };
 function updateWords(dt, t) {
-  if (!words.length && !lex.total) return;
   buildIslandGrid(t);
-  // spatial hash for spacing between words
+  // spatial hash for spacing: words, plus sample points along every stream
   wordGrid = new Map();
   for (const w of words) { const k = gridKey(w.x, w.y); let a = wordGrid.get(k); if (!a) wordGrid.set(k, (a = [])); a.push(w); }
+  for (const st of streams) for (const q of st.samples) { const k = gridKey(q.x, q.y); let a = wordGrid.get(k); if (!a) wordGrid.set(k, (a = [])); a.push(q); }
   const a = activeRect(), ease = 1 - Math.exp(-dt * 1.3), turn = 1 - Math.exp(-dt * 1.1);
   for (const w of words) {
     w.life += dt;
@@ -2085,6 +2094,11 @@ function updateWords(dt, t) {
         const arr = wordGrid.get(gx + ',' + gy); if (!arr) continue;
         for (const o of arr) {
           if (o === w) continue;
+          if (o.isStream) {                       // keep clear of sentences and passages
+            const dx = w.x - o.x, dy = w.y - o.y, d = Math.hypot(dx, dy) || 1e-3, r = o.half + w.hw * 0.6 + 8;
+            if (d < r) { const k = (1 - d / r) * 34; sx += dx / d * k; sy += dy / d * k; }
+            continue;
+          }
           // words are wide and short: keep their boxes apart, mostly by stepping sideways off the line
           // measured in this word's own (rotated) frame
           const dx = w.x - o.x, dy = w.y - o.y, ca = Math.cos(w.rot), sa = Math.sin(w.rot);
@@ -2092,7 +2106,7 @@ function updateWords(dt, t) {
           const ox = w.hw + o.hw + 7 - Math.abs(along), oy = fontWorld * 2.4 + Math.abs(Math.sin(w.rot - o.rot)) * o.hw - Math.abs(across);
           if (ox > 0 && oy > 0) {
             const k = Math.min(1, Math.min(ox / (w.hw + o.hw + 7), oy / (fontWorld * 2.4)) * 1.5);
-            const tie = w.entry.key < o.entry.key ? -1 : 1;
+            const tie = o.isStream ? 1 : (w.entry.id < o.entry.id ? -1 : 1);
             const pa = Math.sign(along || tie) * k * 16, pc = Math.sign(across || tie) * k * 28;
             sx += ca * pa - sa * pc; sy += sa * pa + ca * pc;
           }
@@ -2118,7 +2132,9 @@ function updateWords(dt, t) {
     if (w.life >= w.max || w.dead || w.x < a.x0 - 200 || w.x > a.x1 + 200 || w.y < a.y0 - 200 || w.y > a.y1 + 200) w.remove = true;
   }
   for (let k = words.length - 1; k >= 0; k--) if (words[k].remove) words.splice(k, 1);
+  updateStreams(dt, t);
   spawnWords(t);
+  spawnStreams(t);
 }
 function resolveWord(w, dt) {
   for (let it = 0; it < 5; it++) {
@@ -2134,9 +2150,314 @@ function resolveWord(w, dt) {
   if (nearestGap(w, 0, fieldTmp).d < 0) w.dead = true;
 }
 
+/* ---- sentences and passages ---------------------------------------- */
+// A stream is a head carried by the current and the trail it leaves behind.
+// The text sits on that trail in reading order, so it bends with the water and
+// around islands without ever breaking the order of its words. A sentence is a
+// single line (two or three if it is long); a passage is a ribbon of lines.
+const TRAIL_STEP = 2.5;
+function wrapLines(text, maxChars) {
+  if (text.length <= maxChars) return [text];
+  const n = Math.ceil(text.length / maxChars), target = text.length / n;
+  const lines = [];
+  let rest = text;
+  while (lines.length < n - 1 && rest.length > target * 1.15) {
+    let cut = -1, best = 1e9;
+    for (let i = 1; i < rest.length - 1; i++) if (rest[i] === ' ') { const d = Math.abs(i - target); if (d < best) { best = d; cut = i; } }
+    if (cut < 0) break;
+    lines.push(rest.slice(0, cut)); rest = rest.slice(cut + 1);
+  }
+  lines.push(rest);
+  return lines;
+}
+function layoutFor(p) {
+  const len = p.text.length;
+  const lines = p.type === 'passage'
+    ? wrapLines(p.text, Math.max(46, Math.min(72, Math.ceil(Math.sqrt(len * 14)))))
+    : wrapLines(p.text, len <= 110 ? 999 : len <= 220 ? Math.ceil(len / 2) + 4 : Math.ceil(len / 3) + 4);
+  const maxChars = Math.max(...lines.map((l) => l.length));
+  const lineH = fontWorld * 1.6;
+  const half = (lines.length * lineH) / 2;
+  // the text starts a little behind the head, so lines on the inside of a bend still fit
+  return { lines, maxChars, lineH, half, length: maxChars * lex.adv, margin: half + 6 };
+}
+const probe = { x: 0, y: 0, rot: 0, hw: 0, hr: 0 };
+function gapAt(x, y, half, lookahead) { probe.x = x; probe.y = y; probe.hr = half + fontWorld * 0.3; return nearestGap(probe, lookahead, fieldTmp); }
+// Is (x, y) within `rad` of any word or stream already in the water?
+function nearText(x, y, rad, self) {
+  for (let gy = Math.floor((y - rad - 60) / 40); gy <= Math.floor((y + rad + 60) / 40); gy++)
+    for (let gx = Math.floor((x - rad - 120) / 40); gx <= Math.floor((x + rad + 120) / 40); gx++) {
+      const a = wordGrid.get(gx + ',' + gy); if (!a) continue;
+      for (const o of a) {
+        if (o.owner && o.owner === self) continue;
+        const r = o.isStream ? o.half : Math.max(o.hw, fontWorld);
+        if (Math.hypot(o.x - x, o.y - y) < rad + r) return true;
+      }
+    }
+  return false;
+}
+// Trace the stream line backwards from the head so a new stream arrives whole.
+function traceTrail(x, y, t, length, half) {
+  const pts = [{ x, y }];
+  let px = x, py = y, run = 0;
+  while (run < length * 1.2 + 24) {
+    flowAt(px, py, t, flowTmp);
+    const l = Math.hypot(flowTmp.vx, flowTmp.vy);
+    if (l < 0.6) return null;
+    let dx = -flowTmp.vx / l, dy = -flowTmp.vy / l;
+    // like the water itself, the traced path slides along island shores
+    const g = gapAt(px, py, half, 0);
+    if (g.d < W_NEAR) {
+      const dn = dx * g.nx + dy * g.ny;
+      if (dn < 0) { dx -= g.nx * dn; dy -= g.ny * dn; const dl = Math.hypot(dx, dy) || 1; dx /= dl; dy /= dl; }
+    }
+    px += dx * TRAIL_STEP; py += dy * TRAIL_STEP; run += TRAIL_STEP;
+    pts.push({ x: px, y: py });
+    if (pts.length % 3 === 0) {
+      if (gapAt(px, py, half, 0.4).d < W_BUF + 14) return null;
+      if (nearText(px, py, half + 14, null)) return null;
+    }
+  }
+  return pts;
+}
+function spawnStreams(t) {
+  if (!lex.fontReady) return;
+  const a = activeRect(), v = viewRect(), area = (a.x1 - a.x0) * (a.y1 - a.y0);
+  for (const type of ['passage', 'sentence']) {
+    if (!lex[type].length) continue;
+    const target = Math.max(type === 'passage' ? 1 : 3, Math.round(area / (type === 'passage' ? PASSAGE_AREA : SENTENCE_AREA)));
+    if (streams.filter((s) => s.type === type).length >= target) continue;
+    for (let tries = 0; tries < 14; tries++) {
+      let x, y;
+      if (Math.random() < 0.4) {
+        x = a.x0 + Math.random() * (a.x1 - a.x0); y = a.y0 + Math.random() * (a.y1 - a.y0);
+        if (x > v.x0 && x < v.x1 && y > v.y0 && y < v.y1) continue;
+      } else { x = v.x0 + Math.random() * (v.x1 - v.x0); y = v.y0 + Math.random() * (v.y1 - v.y0); }
+      const p = psiN(x, y, t), k = streamOf(p);
+      if (Math.abs(p - k * LEVEL) > BAND * 1.8 || streamStrength(k) < 0.3 || Math.random() > openness(x, y)) continue;
+      const entry = pickFrom(type); if (!entry) break;
+      const L = layoutFor(entry);
+      if (gapAt(x, y, L.half, 0.4).d < W_BUF + 20 || nearText(x, y, L.half + 16, null)) continue;
+      const pts = traceTrail(x, y, t, L.length + L.margin, L.half);
+      if (!pts) continue;
+      flowAt(x, y, t, flowTmp);
+      entry.lastShown = Date.now();
+      streams.push({ entry, type, ...L, pts, rev: flowTmp.vx < 0, vx: flowTmp.vx, vy: flowTmp.vy, stream: k,
+        life: 0, max: (type === 'passage' ? 95 : 70) + Math.random() * 40, alpha: 0, side: Math.random() < 0.5 ? -1 : 1,
+        still: 0, crowd: 0, samples: [], cum: [0], gap: [], since: 0 });
+      break;
+    }
+  }
+}
+function resampleTrail(st) {
+  const p = st.pts, out = [p[0]];
+  let carry = 0, need = (st.length + st.margin) * 1.2 + 24, run = 0;
+  for (let i = 1; i < p.length && run < need; i++) {
+    const ax = p[i - 1].x, ay = p[i - 1].y, bx = p[i].x, by = p[i].y, seg = Math.hypot(bx - ax, by - ay);
+    let d = TRAIL_STEP - carry;
+    while (d <= seg && run < need) { const f = d / seg; out.push({ x: ax + (bx - ax) * f, y: ay + (by - ay) * f }); run += TRAIL_STEP; d += TRAIL_STEP; }
+    carry = seg - (d - TRAIL_STEP);
+  }
+  st.pts = out;
+}
+function updateStreams(dt, t) {
+  const a = activeRect(), v = viewRect(), ease = 1 - Math.exp(-dt * 1.2), relax = Math.min(0.5, dt * 4);
+  for (const st of streams) {
+    st.life += dt;
+    const h = st.pts[0];
+    // 1. the head follows the current, keeping loosely to its stream line
+    flowAt(h.x, h.y, t, flowTmp);
+    let tvx = flowTmp.vx, tvy = flowTmp.vy;
+    const g2 = flowTmp.gx * flowTmp.gx + flowTmp.gy * flowTmp.gy;
+    if (g2 > 1e-12) {
+      const pull = -(flowTmp.p - st.stream * LEVEL) / g2 * 0.15;
+      const mx = flowTmp.gx * pull, my = flowTmp.gy * pull, ml = Math.hypot(mx, my), cap = 4;
+      tvx += ml > cap ? mx / ml * cap : mx; tvy += ml > cap ? my / ml * cap : my;
+    }
+    // 2. and turns along island shores instead of into them
+    const f = gapAt(h.x, h.y, st.half, 0.45);
+    let push = 0;
+    if (f.d < W_NEAR) {
+      const near = 1 - clamp((f.d - W_BUF) / (W_NEAR - W_BUF), 0, 1);
+      const vn = tvx * f.nx + tvy * f.ny;
+      if (vn < 0) {
+        const sp0 = Math.hypot(tvx, tvy);
+        let ux = -f.ny, uy = f.nx;
+        const along = ux * tvx + uy * tvy;
+        if (along < 0 || (Math.abs(along) < sp0 * 0.25 && st.side < 0)) { ux = -ux; uy = -uy; }
+        tvx += (ux * sp0 - tvx) * near; tvy += (uy * sp0 - tvy) * near;
+      }
+      tvx *= 1 + 0.4 * near; tvy *= 1 + 0.4 * near;
+      push = near * near * 22;
+    }
+    // turn gently: a long line of text cannot take a sharp corner and stay readable
+    {
+      const cur = Math.atan2(st.vy, st.vx), want = Math.atan2(tvy, tvx);
+      let d = want - cur; d -= Math.round(d / 6.2832) * 6.2832;
+      // a ribbon can only bend around a radius wider than itself
+      const maxTurn = Math.min(0.5, Math.max(4, Math.hypot(st.vx, st.vy)) / (st.half * 2.4 + 18)) * dt;
+      const ang = cur + clamp(d, -maxTurn, maxTurn);
+      const sp = Math.hypot(st.vx, st.vy) + (Math.hypot(tvx, tvy) - Math.hypot(st.vx, st.vy)) * ease;
+      st.vx = Math.cos(ang) * sp; st.vy = Math.sin(ang) * sp;
+    }
+    wakeAt(h.x, h.y, wakeTmp);
+    h.x += (st.vx + wakeTmp.vx + f.nx * push) * dt;
+    h.y += (st.vy + wakeTmp.vy + f.ny * push) * dt;
+    if (Math.hypot(h.x - st.pts[1].x, h.y - st.pts[1].y) >= TRAIL_STEP) st.pts.splice(1, 0, { x: h.x, y: h.y });
+    // 3. the trail: moving islands push the water aside, then it slowly relaxes
+    const P = st.pts, n = P.length;
+    for (let i = 1; i < n - 1; i++) {
+      const p = P[i], q0 = P[i - 1], q1 = P[i + 1];
+      p.x += ((q0.x + q1.x) / 2 - p.x) * relax * 0.25;
+      p.y += ((q0.y + q1.y) / 2 - p.y) * relax * 0.25;
+    }
+    const sides = new Map();
+    st.gap.length = n;
+    for (let i = 0; i < n; i++) {
+      const p = P[i];
+      wakeAt(p.x, p.y, wakeTmp);
+      p.x += wakeTmp.vx * dt; p.y += wakeTmp.vy * dt;
+      let g = gapAt(p.x, p.y, st.half, Math.max(dt, 1 / 60) * 1.6);
+      for (let it = 0; it < 4 && g.d < W_BUF; it++) {
+        const isl = g.isl, spd = Math.hypot(isl.vx, isl.vy);
+        let nx = g.nx, ny = g.ny;
+        if (spd > 4 && g.d > -st.half) {
+          // step aside to one consistent side, so the whole line wraps around the island
+          let sd = sides.get(isl);
+          if (sd === undefined) { sd = Math.sign(isl.vx * (p.y - isl._wy) - isl.vy * (p.x - isl._wx)) || 1; sides.set(isl, sd); }
+          nx = -isl.vy / spd * sd; ny = isl.vx / spd * sd;
+          if (nx * g.nx + ny * g.ny < -0.2) { nx = g.nx; ny = g.ny; }
+        }
+        const step = W_BUF - g.d + 0.5;
+        p.x += nx * step; p.y += ny * step;
+        g = gapAt(p.x, p.y, st.half, Math.max(dt, 1 / 60) * 1.6);
+      }
+      st.gap[i] = g.d;
+    }
+    st.since += dt;
+    if (st.since > 0.25) { st.since = 0; resampleTrail(st); }
+    // arc length from the head, for laying out glyphs
+    const Q = st.pts, cum = st.cum;
+    cum.length = Q.length; cum[0] = 0;
+    for (let i = 1; i < Q.length; i++) cum[i] = cum[i - 1] + Math.hypot(Q[i].x - Q[i - 1].x, Q[i].y - Q[i - 1].y);
+    while (Q.length > 4 && cum[Q.length - 2] > (st.length + st.margin) * 1.25 + 30) { Q.pop(); cum.pop(); }
+    // smoothing slowly shortens the trail; let the tail run on along its last direction
+    const want = (st.length + st.margin * 2) * 1.08 + 12;
+    while (cum[Q.length - 1] < want && Q.length >= 2) {
+      const z = Q[Q.length - 1], y0 = Q[Q.length - 2], dl = Math.hypot(z.x - y0.x, z.y - y0.y) || 1;
+      Q.push({ x: z.x + (z.x - y0.x) / dl * TRAIL_STEP, y: z.y + (z.y - y0.y) / dl * TRAIL_STEP });
+      cum.push(cum[cum.length - 1] + TRAIL_STEP); st.gap.push(st.gap[st.gap.length - 1] ?? 99);
+    }
+    buildLinePaths(st);
+    // keep the text reading left to right: if the stream has turned around, fade and flip
+    const rd = st.readDir;
+    if (rd < -0.35) st.flipT = (st.flipT || 0) + dt; else st.flipT = 0;
+    if (st.flipT > 1.5 && !st.flipping) { st.flipping = 1.0; }
+    if (st.flipping) {
+      st.flipping -= dt;
+      if (st.flipping <= 0.5 && !st.flipped) { st.rev = !st.rev; st.flipped = true; buildLinePaths(st); }
+      if (st.flipping <= 0) { st.flipping = 0; st.flipped = false; st.flipT = 0; }
+    }
+    // 4. sample points that other text keeps clear of
+    st.samples = [];
+    for (let i = 0; i < Q.length && cum[i] <= st.length + st.margin + 6; i += 4) st.samples.push({ x: Q[i].x, y: Q[i].y, rot: 0, hw: 2, half: st.half, isStream: true, owner: st });
+    // 5. a stream that stalls, or keeps running into other text, dissolves
+    st.still = Math.hypot(st.vx, st.vy) < 2 ? st.still + dt : Math.max(0, st.still - dt);
+    let hits = 0;
+    for (const q of st.samples) if (nearText(q.x, q.y, st.half * 0.6, st)) hits++;
+    st.crowd = hits > st.samples.length * 0.15 ? st.crowd + dt : Math.max(0, st.crowd - dt);
+    if ((st.still > 4 || st.crowd > 2.5) && st.max > st.life + 4) st.max = st.life + 4;
+    const fadeIn = clamp(st.life / 3, 0, 1), fadeOut = clamp((st.max - st.life) / 4, 0, 1);
+    st.alpha = Math.min(fadeIn, fadeOut) * (st.flipping ? Math.abs(st.flipping - 0.5) * 2 : 1);
+    const far = (q) => q.x < a.x0 - 300 || q.x > a.x1 + 300 || q.y < a.y0 - 300 || q.y > a.y1 + 300;
+    if (st.life >= st.max || (far(h) && far(Q[Q.length - 1]))) st.remove = true;
+  }
+  for (let k = streams.length - 1; k >= 0; k--) if (streams[k].remove) streams.splice(k, 1);
+}
+// Each line of a stream follows its own path: the trail, smoothed over a window
+// that grows with the ribbon's width, then offset sideways. Glyphs are spaced
+// by distance along that path, so letters stay evenly spaced on curves.
+function buildLinePaths(st) {
+  const P = st.pts, n = P.length, cum = st.cum;
+  let end = n - 1;
+  while (end > 1 && cum[end - 1] > st.length + st.margin * 2 + 12) end--;
+  const W = Math.max(3, Math.round((st.half + fontWorld) / TRAIL_STEP));
+  const R = new Array(end + 1);
+  for (let i = 0; i <= end; i++) {
+    let sx = 0, sy = 0, c = 0;
+    for (let k = Math.max(0, i - W); k <= Math.min(n - 1, i + W); k++) { sx += P[k].x; sy += P[k].y; c++; }
+    R[i] = { x: sx / c, y: sy / c };
+  }
+  // reading direction along the path (tail -> head unless reversed)
+  const m = st.lines.length, lines = [];
+  let rdx = 0, rdy = 0;
+  for (let j = 0; j < m; j++) {
+    const off = (j - (m - 1) / 2) * st.lineH;
+    const pts = new Array(end + 1), lc = new Array(end + 1);
+    for (let i = 0; i <= end; i++) {
+      const a0 = R[Math.max(0, i - W)], a1 = R[Math.min(end, i + W)];
+      let tx = a0.x - a1.x, ty = a0.y - a1.y; const tl = Math.hypot(tx, ty) || 1; tx /= tl; ty /= tl;
+      if (st.rev) { tx = -tx; ty = -ty; }
+      if (j === 0) { rdx += tx; rdy += ty; }
+      // clearance of this line: the trail's clearance already allows for the whole ribbon
+      pts[i] = { x: R[i].x - ty * off, y: R[i].y + tx * off, tx, ty, gap: Math.min(st.gap[i] ?? 99, st.gap[Math.min(i + 1, n - 1)] ?? 99) + st.half - Math.abs(off) - fontWorld * 0.5 };
+      lc[i] = i === 0 ? 0 : lc[i - 1] + Math.hypot(pts[i].x - pts[i - 1].x, pts[i].y - pts[i - 1].y);
+    }
+    // where this line's text begins and ends, measured along its own path
+    const at = (arc) => { let i = 0; while (i < end && cum[i] < arc) i++; return lc[i]; };
+    lines.push({ pts, cum: lc, len: lc[end], s0: at(st.margin), s1: at(st.margin + st.length) });
+  }
+  st.paths = lines;
+  // how much the text, as laid out, reads rightward (1) or leftward (-1)
+  const rl = Math.hypot(rdx, rdy) || 1;
+  st.readDir = rdx / rl;
+}
+// Where a line's first letter sits along its path, which way the letters run,
+// and their spacing: lines align at the reading edge; a line on the inside of a
+// bend that doesn't fit slides back, and only if it must, closes up slightly.
+function lineLayout(st, j, chars) {
+  const path = st.paths[j], len = path.len, need = chars * lex.adv;
+  if (st.rev) {
+    const start = clamp(Math.min(path.s0, len - 3 - need), 2, path.s0);
+    const step = lex.adv * Math.min(1, (len - 3 - start) / need);
+    return { start, dir: 1, step };
+  }
+  const start = Math.min(len - 2, Math.max(path.s1, need + 3));
+  const step = lex.adv * Math.min(1, (start - 2) / need);
+  return { start, dir: -1, step };
+}
+function drawStreams(s, left, top) {
+  const adv = lex.adv;
+  for (const st of streams) {
+    if (st.alpha <= 0.01 || !st.paths) continue;
+    ctx.globalAlpha = st.alpha;
+    for (let j = 0; j < st.lines.length; j++) {
+      const line = st.lines[j], path = st.paths[j], P = path.pts, cum = path.cum, n = P.length;
+      if (n < 2) continue;
+      const L = lineLayout(st, j, line.length);
+      for (let ci = 0; ci < line.length; ci++) {
+        const ch = line[ci];
+        if (ch === ' ') continue;
+        const sArc = L.start + L.dir * (ci + 0.5) * L.step;
+        if (sArc < 0 || sArc > cum[n - 1]) continue;
+        let lo = 0, hi = n - 1;
+        while (lo < hi) { const mid = (lo + hi + 1) >> 1; if (cum[mid] <= sArc) lo = mid; else hi = mid - 1; }
+        const k = Math.min(lo, n - 2), p0 = P[k], p1 = P[k + 1];
+        if (p0.gap < 0 || p1.gap < 0) continue;             // never draw onto an island
+        const f = clamp((sArc - cum[k]) / ((cum[k + 1] - cum[k]) || 1), 0, 1);
+        const x = p0.x + (p1.x - p0.x) * f, y = p0.y + (p1.y - p0.y) * f;
+        const X = (x - left) * s, Y = (y - top) * s;
+        if (X < -20 || Y < -20 || X > devW + 20 || Y > devH + 20) continue;
+        ctx.setTransform(p0.tx, p0.ty, -p0.ty, p0.tx, X, Y);
+        ctx.fillText(ch, 0, 0);
+      }
+    }
+  }
+}
+
 /* ---- drawing ------------------------------------------------------- */
 function drawWords() {
-  if (!lex.fontReady || !words.length) return;
+  if (!lex.fontReady || (!words.length && !streams.length)) return;
   const s = cam.scale, left = cam.x - devW / (2 * s), top = cam.y - devH / (2 * s);
   ctx.save();
   ctx.font = `400 ${(fontWorld * s).toFixed(2)}px ${TYPE_FAMILY}`;
@@ -2151,17 +2472,23 @@ function drawWords() {
     ctx.rotate(w.rot);
     ctx.fillText(w.text, 0, 0);
   }
+  drawStreams(s, left, top);
   ctx.restore();
 }
 
 function initLanguage() {
   fontWorld = TYPE_PX / (cam.scale / dpr);
   lex.measure = document.createElement('canvas').getContext('2d');
-  const ready = () => { lex.fontReady = document.fonts ? document.fonts.check(`400 ${TYPE_PX}px "IBM Plex Mono"`) : true; };
+  const ready = () => {
+    lex.fontReady = document.fonts ? document.fonts.check(`400 ${TYPE_PX}px "IBM Plex Mono"`) : true;
+    lex.measure.font = `400 ${TYPE_PX}px ${TYPE_FAMILY}`;
+    lex.adv = lex.measure.measureText('M').width * fontWorld / TYPE_PX;   // monospace advance in world px
+  };
   if (document.fonts && document.fonts.load) document.fonts.load(`400 ${TYPE_PX}px "IBM Plex Mono"`).then(ready, ready);
   else ready();
-  loadVocabulary();
-  setInterval(loadVocabulary, 3 * 3600e3);
+  lex.measure.font = `400 ${TYPE_PX}px ${TYPE_FAMILY}`;
+  loadCollection();
+  setInterval(loadCollection, 3 * 3600e3);
 }
 
 let last = performance.now(), chunkTick = 0;

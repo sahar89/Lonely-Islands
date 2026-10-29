@@ -1,0 +1,22 @@
+{
+  "_about": "Texts the collection draws from. Every work was first published before 1929 and is in the public domain in the United States; files come from Project Gutenberg via the GITenberg mirror on GitHub. Check local law before reuse outside the US.",
+  "242":   { "title": "My Ántonia", "author": "Willa Cather", "year": 1918, "form": "novel", "repo": "My-Antonia_242" },
+  "24":    { "title": "O Pioneers!", "author": "Willa Cather", "year": 1913, "form": "novel", "repo": "O-Pioneers-_24" },
+  "44":    { "title": "The Song of the Lark", "author": "Willa Cather", "year": 1915, "form": "novel", "repo": "The-Song-of-the-Lark_44" },
+  "2814":  { "title": "Dubliners", "author": "James Joyce", "year": 1914, "form": "stories", "repo": "Dubliners_2814" },
+  "4517":  { "title": "Ethan Frome", "author": "Edith Wharton", "year": 1911, "form": "novel", "repo": "Ethan-Frome_4517" },
+  "5670":  { "title": "Jacob's Room", "author": "Virginia Woolf", "year": 1922, "form": "novel", "repo": "Jacob-s-Room_5670" },
+  "1429":  { "title": "The Garden Party and Other Stories", "author": "Katherine Mansfield", "year": 1922, "form": "stories", "repo": "The-Garden-Party-and-Other-Stories_1429" },
+  "13415": { "title": "The Lady with the Dog and Other Stories", "author": "Anton Chekhov", "translator": "Constance Garnett", "year": 1917, "form": "stories", "repo": "The-Lady-with-the-Dog-and-Other-Stories_13415" },
+  "1142":  { "title": "Typhoon", "author": "Joseph Conrad", "year": 1902, "form": "novella", "repo": "Typhoon_1142" },
+  "105":   { "title": "Persuasion", "author": "Jane Austen", "year": 1817, "form": "novel", "repo": "Persuasion_105" },
+  "1260":  { "title": "Jane Eyre", "author": "Charlotte Brontë", "year": 1847, "form": "novel", "repo": "Jane-Eyre_1260" },
+  "205":   { "title": "Walden", "author": "Henry David Thoreau", "year": 1854, "form": "memoir", "repo": "Walden-and-On-The-Duty-Of-Civil-Disobedience_205" },
+  "35698": { "title": "Letters of John Keats to His Family and Friends", "author": "John Keats", "editor": "Sidney Colvin", "year": 1891, "form": "letters", "repo": "Letters-of-John-Keats-to-His-Family-and-Friends_35698" },
+  "1322":  { "title": "Leaves of Grass", "author": "Walt Whitman", "year": 1892, "form": "poetry", "repo": "Leaves-of-Grass_1322" },
+  "12242": { "title": "Poems: Three Series, Complete", "author": "Emily Dickinson", "year": 1896, "form": "poetry", "repo": "Poems-by-Emily-Dickinson-Three-Series-Complete_12242" },
+  "6524":  { "title": "Stray Birds", "author": "Rabindranath Tagore", "translator": "the author", "year": 1916, "form": "poetry", "repo": "Stray-Birds_6524" },
+  "6686":  { "title": "The Gardener", "author": "Rabindranath Tagore", "translator": "the author", "year": 1913, "form": "poetry", "repo": "The-Gardener_6686" },
+  "6522":  { "title": "Fruit-Gathering", "author": "Rabindranath Tagore", "translator": "the author", "year": 1916, "form": "poetry", "repo": "Fruit-Gathering_6522" },
+  "7164":  { "title": "Gitanjali", "author": "Rabindranath Tagore", "translator": "the author", "year": 1912, "form": "poetry", "repo": "Gitanjali_7164" }
+}
