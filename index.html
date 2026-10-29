@@ -1552,6 +1552,7 @@ canvas.addEventListener('pointerdown', (e) => {
     pointer.island = isl; pointer.gox = isl.x - w.x; pointer.goy = isl.y - w.y;
     isl.drag = true; isl.active = true; isl.vx = isl.vy = 0;
     canvas.style.cursor = 'grabbing';
+    sound.lift(isl);
   } else {
     pointer.panning = true; cam.vx = cam.vy = 0;
   }
@@ -1572,7 +1573,7 @@ function endPointer(e) {
   pointer.down = false;
   if (pointer.panning && performance.now() - pointer.lastT > 90) cam.vx = cam.vy = 0;
   pointer.panning = false;
-  if (pointer.island) { const isl = pointer.island; isl.drag = false; setMoved(isl); pointer.island = null; }
+  if (pointer.island) { const isl = pointer.island; isl.drag = false; setMoved(isl); sound.settle(isl); pointer.island = null; }
   canvas.style.cursor = islandAt(pointer.x, pointer.y) ? 'grab' : 'default';
 }
 canvas.addEventListener('pointerup', endPointer);
@@ -1619,6 +1620,7 @@ function influence(A, dt) {
     if (g.gap > MARGIN + 30) continue;
     const close = 1 - clamp((g.gap - MARGIN) / 30, 0, 1);
     if (!B.drag) {
+      if (close > 0.6) sound.touch(B, close);
       B.vx += g.nx * close * 70 * dt; B.vy += g.ny * close * 70 * dt;
       B.active = true;
     }
@@ -2226,6 +2228,68 @@ function initLanguage() {
   setInterval(loadCollection, 3 * 3600e3);
 }
 
+/* =====================================================================
+   14. SOUND
+   Quiet, synthesised, and only while islands move: a soft tone when an
+   island is lifted, a breath of air that rises and falls with its speed,
+   a lower tone as it settles, and a faint knock when it nudges a
+   neighbour. Each island has its own note. Nothing plays until the first
+   touch (browsers require it); press M to mute or unmute.
+   ===================================================================== */
+const sound = (() => {
+  const NOTES = [196.0, 220.0, 261.63, 293.66, 329.63, 392.0, 440.0];   // a soft pentatonic-ish set
+  let ac = null, out = null, air = null, airGain = null, airFilter = null, muted = false, lastTouch = 0;
+  const VOL = 0.5;
+  function init() {
+    if (ac || muted) return;
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if (!AC) return;
+    ac = new AC();
+    out = ac.createGain(); out.gain.value = VOL;
+    const comp = ac.createDynamicsCompressor(); comp.threshold.value = -24; comp.ratio.value = 4;
+    out.connect(comp); comp.connect(ac.destination);
+    // a few seconds of soft (brown) noise, looped, for the air
+    const len = ac.sampleRate * 3, buf = ac.createBuffer(1, len, ac.sampleRate), d = buf.getChannelData(0);
+    let v = 0;
+    for (let i = 0; i < len; i++) { v = (v + 0.02 * (Math.random() * 2 - 1)) / 1.02; d[i] = v * 3.5; }
+    air = ac.createBufferSource(); air.buffer = buf; air.loop = true;
+    airFilter = ac.createBiquadFilter(); airFilter.type = 'bandpass'; airFilter.Q.value = 0.7; airFilter.frequency.value = 350;
+    airGain = ac.createGain(); airGain.gain.value = 0;
+    air.connect(airFilter); airFilter.connect(airGain); airGain.connect(out); air.start();
+  }
+  const noteOf = (isl) => NOTES[Math.abs(hashStr(String(isl.id))) % NOTES.length];
+  function tone(freq, peak, attack, decay, detune = 0) {
+    if (!ac || muted) return;
+    const t = ac.currentTime, g = ac.createGain();
+    g.gain.setValueAtTime(0, t); g.gain.linearRampToValueAtTime(peak, t + attack); g.gain.exponentialRampToValueAtTime(1e-4, t + attack + decay);
+    g.connect(out);
+    for (const [f, a] of [[freq, 1], [freq * 2.005, 0.25], [freq * 3.01, 0.08]]) {   // a bell-like soft sine
+      const o = ac.createOscillator(), og = ac.createGain();
+      o.type = 'sine'; o.frequency.value = f; o.detune.value = detune; og.gain.value = a;
+      o.connect(og); og.connect(g); o.start(t); o.stop(t + attack + decay + 0.05);
+    }
+  }
+  return {
+    lift(isl) { init(); if (ac && ac.state === 'suspended') ac.resume(); tone(noteOf(isl), 0.05, 0.03, 0.9, 4); },
+    settle(isl) { tone(noteOf(isl) / 2, 0.045, 0.05, 1.4, -3); },
+    touch(isl, k) {
+      if (!ac || muted) return;
+      const now = ac.currentTime; if (now - lastTouch < 0.6) return; lastTouch = now;
+      tone(noteOf(isl) * 1.5, 0.012 + 0.012 * k, 0.005, 0.35);
+    },
+    update(dt) {
+      if (!ac || !airGain) return;
+      let sp = 0;
+      for (const isl of world.islands.values()) if (isl.drag || isl.active) sp = Math.max(sp, Math.hypot(isl.vx, isl.vy));
+      const k = muted ? 0 : clamp(sp / 420, 0, 1), t = ac.currentTime;
+      airGain.gain.setTargetAtTime(0.11 * k * k, t, 0.12);
+      airFilter.frequency.setTargetAtTime(260 + 900 * k, t, 0.15);
+    },
+    toggle() { muted = !muted; if (out) out.gain.setTargetAtTime(muted ? 0 : VOL, ac.currentTime, 0.05); },
+  };
+})();
+addEventListener('keydown', (e) => { if ((e.key === 'm' || e.key === 'M') && !e.metaKey && !e.ctrlKey && !e.altKey) sound.toggle(); });
+
 let last = performance.now(), chunkTick = 0;
 function frame(now) {
   const dt = Math.min(0.05, (now - last) / 1000); last = now;
@@ -2236,6 +2300,7 @@ function frame(now) {
   updateIslands(dt);
   for (const isl of world.islands.values()) if (isl.drag || isl.active) trail(isl, dt);
   updateParticles(dt);
+  sound.update(dt);
   updateWords(dt, t);
   render(t);
   drawWords();

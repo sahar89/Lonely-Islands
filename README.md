@@ -6,6 +6,7 @@ An interactive, generative pixel-art world of floating islands about friendship,
 - **Drag empty space** to explore the infinite canvas.
 - **Drag an island** to move it. Islands never overlap. The writing parts around it as it moves and closes again behind it.
 - **Scroll or pinch** to zoom around the cursor.
+- **Sound.** Moving an island makes quiet, synthesised sounds: a soft note as you pick it up, air that follows its speed, a lower note as it settles, and a faint knock when it nudges a neighbour. Press **M** to mute.
 
 
 ## The writing
