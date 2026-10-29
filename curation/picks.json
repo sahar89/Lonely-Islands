@@ -167,5 +167,19 @@
     { "book": "1260",  "word": "companionship",  "theme": "friendship" },
     { "book": "1142",  "word": "keelson",        "theme": "migration" },
     { "book": "4517",  "word": "sleigh",         "theme": "connection" }
+  ],
+  "ganjoor": [
+    { "poem": "roodaki/baghimande/sh121", "couplets": [0, 1], "type": "passage", "theme": "belonging" },
+    { "poem": "moulavi/masnavi/daftar1/sh1", "couplets": [0, 1], "type": "passage", "theme": "separation" },
+    { "poem": "moulavi/masnavi/daftar1/sh1", "couplets": [3, 3], "type": "sentence", "theme": "belonging" },
+    { "poem": "moulavi/masnavi/daftar1/sh1", "couplets": [5, 5], "type": "sentence", "theme": "connection" },
+    { "poem": "saadi/divan/ghazals/sh268", "couplets": [0, 0], "type": "sentence", "theme": "separation" },
+    { "poem": "saadi/golestan/gbab2/sh11", "couplets": [4, 4], "type": "sentence", "theme": "connection" },
+    { "poem": "saadi/golestan/gbab2/sh28", "couplets": [4, 4], "type": "sentence", "theme": "friendship" },
+    { "poem": "hafez/ghazal/sh255", "couplets": [0, 0], "type": "sentence", "theme": "belonging" },
+    { "poem": "hafez/ghazal/sh255", "couplets": [7, 7], "type": "sentence", "theme": "migration" },
+    { "poem": "babataher/2beytiha/sh31", "couplets": [0, 1], "type": "passage", "theme": "migration" },
+    { "poem": "babataher/2beytiha/sh57", "couplets": [0, 1], "type": "passage", "theme": "separation" },
+    { "poem": "babataher/2beytiha/sh268", "couplets": [0, 1], "type": "passage", "theme": "separation" }
   ]
 }

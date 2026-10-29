@@ -28,5 +28,31 @@
   "2407":  { "title": "Die Leiden des jungen Werther, Band 1", "author": "Johann Wolfgang von Goethe", "year": 1774, "form": "novel in letters", "language": "de", "repo": "Die-Leiden-des-jungen-Werther---Band-1_2407" },
   "3498":  { "title": "Buch der Lieder", "author": "Heinrich Heine", "year": 1827, "form": "poems", "language": "de", "repo": "Buch-der-Lieder_3498" },
   "55236": { "title": "I Canti", "author": "Giacomo Leopardi", "year": 1835, "form": "poems", "language": "it", "repo": "I-Canti_55236" },
-  "59037": { "title": "Cantares gallegos", "author": "Rosalía de Castro", "year": 1863, "form": "poems", "language": "gl", "repo": "Cantares-gallegos_59037" }
+  "59037": { "title": "Cantares gallegos", "author": "Rosalía de Castro", "year": 1863, "form": "poems", "language": "gl", "repo": "Cantares-gallegos_59037" },
+  "_ganjoor": {
+    "about": "Persian (Farsi) writing comes from Ganjoor's public data export (github.com/ganjoor/ganjoor-data), pinned to one commit so the text can be rebuilt exactly. Only classical poets, centuries out of copyright.",
+    "sha": "34f4ab3e463903f9399d7ca208b9333911389f94",
+    "poets": {
+      "roodaki": {
+        "author": "رودکی (Rudaki)",
+        "died": 941
+      },
+      "moulavi": {
+        "author": "مولانا (Rumi)",
+        "died": 1273
+      },
+      "saadi": {
+        "author": "سعدی (Saadi)",
+        "died": 1291
+      },
+      "hafez": {
+        "author": "حافظ (Hafez)",
+        "died": 1390
+      },
+      "babataher": {
+        "author": "باباطاهر (Baba Taher)",
+        "died": 1055
+      }
+    }
+  }
 }
