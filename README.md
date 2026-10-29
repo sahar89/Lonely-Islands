@@ -1,62 +1,77 @@
-# Floating Islands
+# The Space Between Us
 
-An interactive, generative pixel-art world of floating islands about loneliness, belonging and how hard it is to reach one another. The islands are drawn in white and electric blue `#2200FF` with ordered dithering, and each has a single inhabitant going about their day. Words that real people used on Bluesky drift through the empty space between the islands like slow water. The currents bend around the islands and never touch them.
+An interactive, generative pixel-art world of floating islands about friendship, separation, migration, belonging, and how hard it is to stay close to one another. Each island is drawn in white and electric blue `#2200FF` with ordered dithering, and each has a single inhabitant going about their day. Between the islands, real human writing drifts through the empty space like slow water: single words, whole sentences, and short passages from public-domain letters, diaries, fiction and poetry. The currents bend around the islands and never touch them.
 
 ## Interact
 - **Drag empty space** to explore the infinite canvas.
-- **Drag an island** to move it. Islands never overlap. The language current parts around a moving island and closes again behind it.
+- **Drag an island** to move it. Islands never overlap. The current parts around a moving island and closes again behind it.
 - **Scroll or pinch** to zoom around the cursor.
 
 ## Repository
 | Path | What it is |
 | --- | --- |
 | `index.html` | The whole artwork: HTML, CSS and Canvas 2D JavaScript, with no build step. |
-| `words.json` | The current vocabulary, updated by the daily workflow. |
-| `collector/` | Node script that gathers the vocabulary from public Bluesky posts. |
-| `.github/workflows/collect-words.yml` | Runs the collector daily (and on demand), commits `words.json`, then redeploys. |
-| `.github/workflows/pages.yml` | Publishes `index.html` and `words.json` to GitHub Pages. |
+| `content.json` | The writing the currents carry, with full source attribution. |
+| `curation/sources.json` | The public-domain books the collection draws from. |
+| `curation/picks.json` | The hand-picked excerpts: book, paragraph, and exact first and last words. |
+| `curation/build_content.py` | Rebuilds `content.json` from the original texts (Python 3, standard library only). |
+| `.github/workflows/pages.yml` | Publishes `index.html` and `content.json` to GitHub Pages on every push to `main`. |
 
-## Setup
-1. Push this repository to GitHub.
-2. In **Settings → Pages**, set **Source** to **GitHub Actions**.
-3. In **Actions**, open **Collect words** and click **Run workflow**. The site deploys when the run finishes. Until this first run, `words.json` is empty and the currents are simply absent.
-4. *(Optional)* Add the repository secrets `BLUESKY_HANDLE` and `BLUESKY_APP_PASSWORD` (an app password, not your main password). Signed-in search is more reliable. Without them, the collector uses Bluesky's unauthenticated public search. If that is refused, it listens to Jetstream, Bluesky's public live post stream, for a few minutes instead.
+## The writing
+The collection holds 30 words, 46 sentences and 18 passages from 19 books first published before 1929, all in the public domain in the United States. The authors are Willa Cather, James Joyce, Edith Wharton, Virginia Woolf, Katherine Mansfield, Anton Chekhov (tr. Constance Garnett), Joseph Conrad, Jane Austen, Charlotte Brontë, Henry David Thoreau, John Keats (letters), Walt Whitman, Emily Dickinson and Rabindranath Tagore.
 
-The workflow runs every day at 09:17 UTC. If Bluesky can't be reached or nothing new passes the filters, `words.json` stays as it was and the site keeps showing the last vocabulary.
+Excerpts were chosen for ordinary, specific moments rather than declared feelings: a father who no longer plays his violin in the new country, a grandmother who thinks she is home in Norway, a letter that can't be written, a friend who lives in the same city and is never seen.
 
-## How the vocabulary is collected
-- **Sources.** Recent public English posts (last 72 hours) matching theme terms: friendship, loneliness, belonging, migration, homesickness, human connection, losing touch, reconnecting and community. The terms are in `collector/config.mjs`. Term lists for Spanish, Portuguese, French, German and Japanese are there too; add their codes to `ACTIVE_LANGUAGES` to turn them on.
-- **What's removed.** URLs, @mentions, emails, numbers, emoji and unrelated hashtags; words that look like names (capitalised mid-sentence, or matching an author's handle or display name); stopwords; everyday filler such as "posting" or "lol"; posts carrying moderation labels; spam patterns; profanity (multilingual lists from `naughty-words`); and self-harm or violence vocabulary.
-- **Privacy.** A word is kept only if **at least two different people** used it in the same run, and a phrase only if at least three did. Copies of the same text posted by several accounts count as a single post. Posts, post IDs, handles and author IDs are never written anywhere. Each author contributes at most two posts per run.
-- **Change over time.** Frequencies decay by 15% per run. Words not seen for 45 days are dropped, and the vocabulary is capped at 1,500 entries.
+- **Exact wording.** The build copies each excerpt character for character from the Project Gutenberg text (via the GITenberg mirror on GitHub) and stops if a start or end phrase can't be found. The only changes are layout: line breaks inside a paragraph become spaces, line breaks in verse become ` / `, and Gutenberg's markup for italics and superscripts is dropped.
+- **Attribution.** Every entry records its author, title, translator or editor where there is one, year, Gutenberg edition, URL and paragraph. The artwork does not display it.
+- **Rights.** The texts are public domain in the US. Some translations and editions may still be protected elsewhere, so check local law before reusing them outside the US.
 
-The collector makes at most a few hundred read requests per run, about one per second, well within Bluesky's public rate limits. Because entries are aggregated and unattributed, nothing in `words.json` can be traced back to a post or a person. Data from deleted posts isn't stored either; the words simply age out.
+### Adding or changing excerpts
+1. If the book is new, add it to `curation/sources.json` with its Gutenberg number and GITenberg repository name.
+2. Add an entry to `curation/picks.json` with the book, the paragraph number, a theme, and the exact `start` and `end` words. Use `"verse": true` for poetry.
+3. Run `python3 curation/build_content.py`. Use `--check` to verify without writing. Downloaded texts are cached in `curation/.cache/`.
 
-## `words.json`
+## `content.json`
 ```json
 {
-  "schema": 1,
-  "updatedAt": "2026-10-29T09:20:11.000Z",
-  "source": "bluesky-search",
-  "entries": [
-    { "text": "homesick", "kind": "word", "lang": "en", "theme": "homesickness",
-      "origin": "bluesky", "status": "approved",
-      "firstSeen": "2026-10-29T09:20:11.000Z", "lastSeen": "2026-10-29T09:20:11.000Z", "frequency": 7 }
-  ]
+  "id": "7e5c542d15",
+  "content": "We immigrants never speak any language well.",
+  "type": "sentence",
+  "language": "en",
+  "theme": "migration",
+  "source": {
+    "title": "The Song of the Lark", "author": "Willa Cather", "year": 1915, "form": "novel",
+    "edition": "Project Gutenberg #44", "url": "https://www.gutenberg.org/ebooks/44",
+    "locator": "paragraph 1178", "license": "Public domain in the USA (published before 1929)"
+  },
+  "collected_at": "2026-10-28",
+  "permission_status": "public-domain",
+  "origin": "curated",
+  "status": "approved"
 }
 ```
-- `kind`: `word` or `phrase` (2–4 words).
-- `origin`: `bluesky` for collected words, `visitor` for future visitor contributions.
-- `status`: `approved`, `pending` or `rejected`. Only `approved` entries appear in the artwork.
-- `frequency`: decayed count of distinct people who used the entry.
+- `type`: `word`, `sentence` or `passage`.
+- `theme`: `friendship`, `separation`, `migration`, `belonging` or `connection`.
+- `permission_status`: only `public-domain`, `licensed` or `granted` entries can appear.
+- `origin`: `curated` for this collection, `visitor` for future visitor writing.
+- `status`: `approved`, `pending` or `rejected`. Only `approved` entries appear.
 
-**Visitor contributions (future).** Add entries with `"origin": "visitor"` and `"status": "pending"`. Once a moderator sets them to `approved`, they join the same currents. The collector never changes or removes visitor entries.
+**Visitor writing (not built yet).** A submission would be stored as `"origin": "visitor"`, `"status": "pending"`, `"permission_status": "pending"`. After moderation, and once the writer has granted permission (`"granted"`), it joins the same currents with no change to the artwork. Nothing collects submissions today.
 
 ## How the artwork uses it
-- **Loading.** The page loads `words.json` from its own site, never from Bluesky, and checks for a new version every three hours. If the file can't be loaded, it uses the last copy this browser saw. If there is none, the islands appear without words. Loading problems are never shown on screen.
-- **Choosing words.** Recently seen words appear more often. New words enter gradually over about two days, and words that keep returning persist longer. Frequency counts for only part of a word's weight, and each theme and language is balanced so none dominates.
-- **Motion.** Words are carried in world space by a slowly drifting stream function. Its level lines form long, loose currents, and much of the world is left empty. Near an island the current turns along the shore and speeds up slightly. A moving island pushes water ahead of it and leaves a wake. Words are also checked against where each island is about to be, so even fast drags never pass through them; a word wedged between islands dissolves rather than overlapping.
-- **Type.** IBM Plex Mono 400 at 12px (at the default zoom), `rgba(34, 0, 255, 0.5)`.
+- **Rotation.** The collection turns over slowly. Each piece rises and falls on its own tide, with a cycle of about 23 minutes that shifts from day to day, and a piece that has just flowed past rests for about nine minutes. Frequency plays no part. The page reloads `content.json` every three hours and falls back to the last copy the browser saw.
+- **Words** drift as small, separate elements.
+- **Sentences** run as single curved lines (two or three for long ones) along a trail the current draws.
+- **Passages** form ribbons of four to seven lines.
+- **Bending around islands.** Text follows its own trail in reading order, so it bends around islands without reordering. Near a moving island the trail steps to one side and wraps around it, then relaxes back into the current. A stream that turns to read backwards fades and flips.
+- **Spacing.** Streams keep apart from each other and from single words. Text that stalls or keeps crowding other text dissolves.
+- **Never on an island.** Each letter's clearance from every island is checked before it is drawn, against where the island is now and where it is about to be.
+- **Type.** IBM Plex Mono 400 at 12px (at the default zoom), `rgba(34, 0, 255, 0.5)` on `#FFFFFF`.
+
+## Deploy
+Every push to `main` deploys to GitHub Pages (**Settings → Pages → Source: GitHub Actions**).
+
+**Embedding in Framer.** Add an **Embed** component, choose **URL**, and paste the Pages address (for example `https://sahar89.github.io/Lonely-Islands/`). The artwork fills whatever frame it's given and has no UI of its own. Scroll and drag inside the embed control the canvas, so leave some page area outside it for scrolling.
 
 ## Run locally
-Serve the folder over HTTP so `words.json` can load (for example `npx serve .` or `python3 -m http.server`), then open it in a modern desktop browser. To collect words by hand: `cd collector && npm ci && npm run collect`.
+Serve the folder over HTTP so `content.json` can load (for example `python3 -m http.server`), then open it in a modern desktop browser.

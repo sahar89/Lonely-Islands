@@ -1,12 +1,11 @@
 name: Deploy site
 
-# Publishes index.html and words.json to GitHub Pages. Runs on every push to
-# main, by hand, and after the daily word collection.
+# Publishes the artwork and its content collection to GitHub Pages on every
+# push to main, or by hand.
 on:
   push:
     branches: [main]
   workflow_dispatch:
-  workflow_call:
 
 permissions:
   contents: read
@@ -25,13 +24,11 @@ jobs:
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - uses: actions/checkout@v4
-        with:
-          ref: main   # pick up the words.json commit made earlier in the same run
 
       - name: Assemble site
         run: |
           mkdir -p _site
-          cp index.html words.json _site/
+          cp index.html content.json _site/
 
       - uses: actions/configure-pages@v5
 
