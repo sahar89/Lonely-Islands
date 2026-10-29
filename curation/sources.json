@@ -18,5 +18,15 @@
   "6524":  { "title": "Stray Birds", "author": "Rabindranath Tagore", "translator": "the author", "year": 1916, "form": "poetry", "repo": "Stray-Birds_6524" },
   "6686":  { "title": "The Gardener", "author": "Rabindranath Tagore", "translator": "the author", "year": 1913, "form": "poetry", "repo": "The-Gardener_6686" },
   "6522":  { "title": "Fruit-Gathering", "author": "Rabindranath Tagore", "translator": "the author", "year": 1916, "form": "poetry", "repo": "Fruit-Gathering_6522" },
-  "7164":  { "title": "Gitanjali", "author": "Rabindranath Tagore", "translator": "the author", "year": 1912, "form": "poetry", "repo": "Gitanjali_7164" }
+  "7164":  { "title": "Gitanjali", "author": "Rabindranath Tagore", "translator": "the author", "year": 1912, "form": "poetry", "repo": "Gitanjali_7164" },
+  "5781":  { "title": "Le Grand Meaulnes", "author": "Alain-Fournier", "year": 1913, "form": "novel", "language": "fr", "repo": "Le-Grand-Meaulnes_5781" },
+  "11770": { "title": "Lettres de mon moulin", "author": "Alphonse Daudet", "year": 1869, "form": "stories", "language": "fr", "repo": "Lettres-de-mon-moulin_11770", "file": "11770-8.txt" },
+  "6099":  { "title": "Les Fleurs du mal", "author": "Charles Baudelaire", "year": 1857, "form": "poems", "language": "fr", "repo": "Les-Fleurs-du-Mal_6099" },
+  "39209": { "title": "Platero y yo", "author": "Juan Ramón Jiménez", "year": 1914, "form": "prose poems", "language": "es", "repo": "Platero-y-yo_39209" },
+  "17340": { "title": "Marianela", "author": "Benito Pérez Galdós", "year": 1878, "form": "novel", "language": "es", "repo": "Marianela_17340" },
+  "2000":  { "title": "Don Quijote", "author": "Miguel de Cervantes", "year": 1605, "form": "novel", "language": "es", "repo": "Don-Quijote_2000" },
+  "2407":  { "title": "Die Leiden des jungen Werther, Band 1", "author": "Johann Wolfgang von Goethe", "year": 1774, "form": "novel in letters", "language": "de", "repo": "Die-Leiden-des-jungen-Werther---Band-1_2407" },
+  "3498":  { "title": "Buch der Lieder", "author": "Heinrich Heine", "year": 1827, "form": "poems", "language": "de", "repo": "Buch-der-Lieder_3498" },
+  "55236": { "title": "I Canti", "author": "Giacomo Leopardi", "year": 1835, "form": "poems", "language": "it", "repo": "I-Canti_55236" },
+  "59037": { "title": "Cantares gallegos", "author": "Rosalía de Castro", "year": 1863, "form": "poems", "language": "gl", "repo": "Cantares-gallegos_59037" }
 }

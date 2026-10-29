@@ -19,11 +19,11 @@ CACHE = os.path.join(HERE, '.cache')
 RAW = 'https://raw.githubusercontent.com/GITenberg/{repo}/master/{file}'
 
 
-def fetch(book, repo):
+def fetch(book, repo, file=None):
     os.makedirs(CACHE, exist_ok=True)
     path = os.path.join(CACHE, f'{book}.txt')
     if not os.path.exists(path):
-        for name in (f'{book}.txt', f'{book}-0.txt', f'{book}-8.txt'):
+        for name in ([file] if file else [f'{book}.txt', f'{book}-0.txt', f'{book}-8.txt']):
             try:
                 with urllib.request.urlopen(RAW.format(repo=repo, file=name), timeout=60) as r:
                     data = r.read()
@@ -34,7 +34,12 @@ def fetch(book, repo):
             sys.exit(f'could not download {repo}')
         with open(path, 'wb') as f:
             f.write(data)
-    return open(path, encoding='utf-8', errors='replace').read().replace('\r\n', '\n')
+    raw = open(path, 'rb').read()
+    try:
+        text = raw.decode('utf-8')
+    except UnicodeDecodeError:
+        text = raw.decode('latin-1')   # older Gutenberg files ("-8.txt") are ISO-8859-1
+    return text.replace('\r\n', '\n')
 
 
 def paragraphs(text):
@@ -87,7 +92,7 @@ def main():
 
     sources = {k: v for k, v in json.load(open(os.path.join(HERE, 'sources.json'))).items() if not k.startswith('_')}
     picks = json.load(open(os.path.join(HERE, 'picks.json')))
-    books = {b: paragraphs(fetch(b, m['repo'])) for b, m in sources.items()}
+    books = {b: paragraphs(fetch(b, m['repo'], m.get('file'))) for b, m in sources.items()}
 
     try:
         prev = {e['id']: e for e in json.load(open(args.out))['entries']}
@@ -102,7 +107,7 @@ def main():
             'id': eid,
             'content': content,
             'type': kind,
-            'language': 'en',
+            'language': sources[pick['book']].get('language', 'en'),
             'theme': pick['theme'],
             'source': source_record(pick['book'], sources[pick['book']], locator),
             'collected_at': prev.get(eid, {}).get('collected_at', today),
