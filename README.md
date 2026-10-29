@@ -18,10 +18,11 @@ An interactive, generative pixel-art world of floating islands about friendship,
 | `.github/workflows/pages.yml` | Publishes `index.html` and `content.json` to GitHub Pages on every push to `main`. |
 
 ## The writing
-The collection holds 30 words, 46 sentences and 59 passages from 19 books first published before 1929, all in the public domain in the United States. The authors are Willa Cather, James Joyce, Edith Wharton, Virginia Woolf, Katherine Mansfield, Anton Chekhov (tr. Constance Garnett), Joseph Conrad, Jane Austen, Charlotte Brontë, Henry David Thoreau, John Keats (letters), Walt Whitman, Emily Dickinson and Rabindranath Tagore.
+The collection holds 29 words, 42 sentences and 44 passages from 19 books first published before 1929, all in the public domain in the United States. The authors are Willa Cather, James Joyce, Edith Wharton, Virginia Woolf, Katherine Mansfield, Anton Chekhov (tr. Constance Garnett), Joseph Conrad, Jane Austen, Charlotte Brontë, Henry David Thoreau, John Keats (letters), Walt Whitman, Emily Dickinson and Rabindranath Tagore.
 
 Excerpts were chosen for ordinary, specific moments rather than declared feelings: a father who no longer plays his violin in the new country, a grandmother who thinks she is home in Norway, a letter that can't be written, a friend who lives in the same city and is never seen.
 
+- **Suitable for all ages.** The collection leaves out anything about bodies or physical intimacy, death or illness, drinking or smoking, and other adult themes.
 - **Exact wording.** The build copies each excerpt character for character from the Project Gutenberg text (via the GITenberg mirror on GitHub) and stops if a start or end phrase can't be found. The only changes are layout: line breaks inside a paragraph become spaces, line breaks in verse become ` / `, and Gutenberg's markup for italics and superscripts is dropped.
 - **Attribution.** Every entry records its author, title, translator or editor where there is one, year, Gutenberg edition, URL and paragraph. The artwork does not display it.
 - **Rights.** The texts are public domain in the US. Some translations and editions may still be protected elsewhere, so check local law before reusing them outside the US.
