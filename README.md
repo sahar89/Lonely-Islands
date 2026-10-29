@@ -18,7 +18,16 @@ An interactive, generative pixel-art world of floating islands about friendship,
 | `.github/workflows/pages.yml` | Publishes `index.html` and `content.json` to GitHub Pages on every push to `main`. |
 
 ## The writing
-The collection holds 29 words, 42 sentences and 44 passages from 19 books first published before 1929, all in the public domain in the United States. The authors are Willa Cather, James Joyce, Edith Wharton, Virginia Woolf, Katherine Mansfield, Anton Chekhov (tr. Constance Garnett), Joseph Conrad, Jane Austen, Charlotte Brontë, Henry David Thoreau, John Keats (letters), Walt Whitman, Emily Dickinson and Rabindranath Tagore.
+The collection holds 29 words, 54 sentences and 79 passages from 29 books first published before 1929, all in the public domain in the United States. Most of it is in English: Willa Cather, James Joyce, Edith Wharton, Virginia Woolf, Katherine Mansfield, Anton Chekhov (tr. Constance Garnett), Joseph Conrad, Jane Austen, Charlotte Brontë, Henry David Thoreau, John Keats (letters), Walt Whitman, Emily Dickinson and Rabindranath Tagore.
+
+Nearly a third of the pieces are in five other languages, always in the original, never translated:
+- **French:** Alain-Fournier, *Le Grand Meaulnes*; Alphonse Daudet, *Lettres de mon moulin*.
+- **German:** Goethe, *Die Leiden des jungen Werther*; Heinrich Heine, *Buch der Lieder*.
+- **Spanish:** Juan Ramón Jiménez, *Platero y yo*; Benito Pérez Galdós, *Marianela*; Cervantes, *Don Quijote*.
+- **Italian:** Giacomo Leopardi, *I Canti*.
+- **Galician:** Rosalía de Castro, *Cantares gallegos*, including her emigrant's farewell "Adiós ríos, adiós fontes".
+
+Languages are limited to those IBM Plex Mono can set (Latin and Cyrillic scripts). Scripts whose letters join or combine, such as Arabic or Devanagari, can't be laid out letter by letter along the currents.
 
 Excerpts were chosen for ordinary, specific moments rather than declared feelings: a father who no longer plays his violin in the new country, a grandmother who thinks she is home in Norway, a letter that can't be written, a friend who lives in the same city and is never seen.
 
@@ -28,7 +37,7 @@ Excerpts were chosen for ordinary, specific moments rather than declared feeling
 - **Rights.** The texts are public domain in the US. Some translations and editions may still be protected elsewhere, so check local law before reusing them outside the US.
 
 ### Adding or changing excerpts
-1. If the book is new, add it to `curation/sources.json` with its Gutenberg number and GITenberg repository name.
+1. If the book is new, add it to `curation/sources.json` with its Gutenberg number, GITenberg repository name and `language` (an ISO code such as `fr`; English if left out). If the mirror has more than one text file, name the right one in `file` (older files ending in `-8.txt` are read as Latin-1).
 2. Add an entry to `curation/picks.json` with the book, the paragraph number, a theme, and the exact `start` and `end` words. Use `"verse": true` for poetry.
 3. Run `python3 curation/build_content.py`. Use `--check` to verify without writing. Downloaded texts are cached in `curation/.cache/`.
 
